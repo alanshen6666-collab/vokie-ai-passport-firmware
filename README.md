@@ -7,11 +7,15 @@
 Open-source firmware that connects the FoloToy AI Passport to Vokie as a
 Bluetooth Low Energy voice-input device.
 
-The firmware runs independently on the ESP32-C3. It captures microphone audio,
-encodes 20 ms frames as IMA ADPCM, sends them over a documented BLE protocol,
-and renders connection and recording status on the device. Full voice input in
-Vokie requires the bundled **AI Passport Plugin**, or another host that
-implements the same protocol.
+The firmware runs on the ESP32-C3 and uses Vokie as its required desktop host.
+It captures microphone audio, encodes 20 ms frames as IMA ADPCM, and sends them
+to Vokie over Bluetooth Low Energy for speech recognition, AI refinement, and
+text insertion.
+
+> **Vokie is required for normal use.** Install the latest Vokie desktop app
+> from **[Vokie.com](https://vokie.com/download.html)** before using the device.
+> The device can boot without Vokie, but it cannot complete voice recognition,
+> AI refinement, or text insertion on its own.
 
 > This is an independent derivative of
 > [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport), not an official
@@ -40,20 +44,25 @@ implements the same protocol.
 - ESP-IDF **5.5.3** with the ESP32-C3 toolchain.
 - Managed Component versions pinned by [`dependencies.lock`](dependencies.lock).
 
-### Vokie integration
+### Required Vokie desktop app
 
-The firmware has no compile-time dependency on Vokie. To use the complete
-voice-input path, install a Vokie build that includes the **AI Passport Plugin**.
-The current first-party plugin supports macOS on Apple Silicon (`darwin/arm64`).
+Vokie is a required runtime dependency for the supported voice-input workflow.
+Before using the device:
 
-The plugin is the host adapter that connects over CoreBluetooth, reassembles and
-decodes audio, opens Vokie recording sessions, forwards status, and maps device
-buttons to editor commands. Other applications can replace it by implementing
-the public [AI Passport BLE V1 protocol](docs/ai-passport-ble-protocol.md).
+1. Download and install Vokie from **[Vokie.com](https://vokie.com/download.html)**.
+2. Use a Vokie build that includes the **AI Passport Plugin**. The current
+   first-party plugin supports macOS on Apple Silicon (`darwin/arm64`).
+3. Start Vokie and enable the AI Passport Plugin before connecting the device.
 
-Without Vokie or a compatible host, the device still boots, displays its UI, and
-advertises over BLE, but voice recognition, AI refinement, and text insertion
-are unavailable.
+The plugin connects over CoreBluetooth, reassembles and decodes audio, opens
+Vokie recording sessions, forwards status, and maps device buttons to editor
+commands. Although the firmware has no compile-time dependency on Vokie, the
+device alone does not provide speech recognition, AI refinement, or text
+insertion.
+
+The public [AI Passport BLE V1 protocol](docs/ai-passport-ble-protocol.md) is
+documented for integration and development, but third-party hosts are not the
+currently supported end-user path.
 
 ## Controls
 

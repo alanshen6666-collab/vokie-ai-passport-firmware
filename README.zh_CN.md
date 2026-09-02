@@ -6,7 +6,9 @@
 
 这是将 FoloToy AI Passport 连接到 Vokie、作为 Bluetooth Low Energy 语音输入设备使用的开源固件。
 
-固件独立运行在 ESP32-C3 上，负责采集麦克风音频、把 20 ms 音频帧编码为 IMA ADPCM、通过公开的 BLE 协议发送，并在设备屏幕上显示连接和录音状态。在 Vokie 中使用完整语音输入能力，需要内置的 **AI Passport 插件**，或者其他实现相同协议的兼容主机。
+固件运行在 ESP32-C3 上，并把 Vokie 作为必需的桌面端宿主。设备负责采集麦克风音频、把 20 ms 音频帧编码为 IMA ADPCM，并通过 Bluetooth Low Energy 发送给 Vokie，由 Vokie 完成语音识别、AI 润色和文字输入。
+
+> **正常使用本设备必须安装 Vokie。** 请先前往 **[Vokie.com](https://vokie.com/download.html)** 下载并安装最新版 Vokie 桌面应用。没有 Vokie 时，设备可以启动，但不能独立完成语音识别、AI 润色或文字输入。
 
 > 本项目是 [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) 的独立衍生版本，不是 FoloToy 官方发布。上游源码及本项目衍生代码按 MIT License 分发；产品名称和品牌素材适用[许可与归属](#许可与归属)中的独立条款。
 
@@ -28,13 +30,17 @@
 - ESP-IDF **5.5.3** 及 ESP32-C3 工具链。
 - [`dependencies.lock`](dependencies.lock) 锁定的 Managed Component 版本。
 
-### Vokie 集成
+### 必需安装 Vokie 桌面应用
 
-固件编译不依赖 Vokie。若要使用完整语音输入链路，需要安装包含 **AI Passport 插件**的 Vokie 版本。当前第一方插件支持 Apple Silicon Mac（`darwin/arm64`）。
+Vokie 是当前受支持语音输入链路的强运行时依赖。使用设备前必须：
 
-插件是主机适配层，负责通过 CoreBluetooth 连接设备、重组和解码音频、创建 Vokie 录音会话、回传状态，并把设备按键映射为编辑命令。其他应用也可以实现公开的 [AI Passport BLE V1 协议](docs/ai-passport-ble-protocol.zh_CN.md)来替代插件。
+1. 前往 **[Vokie.com](https://vokie.com/download.html)** 下载并安装 Vokie。
+2. 使用包含 **AI Passport 插件**的 Vokie 版本。当前第一方插件支持 Apple Silicon Mac（`darwin/arm64`）。
+3. 启动 Vokie 并启用 AI Passport 插件，再连接设备。
 
-没有 Vokie 或兼容主机时，设备仍可启动、显示界面和广播 BLE，但不能完成语音识别、AI 润色和文字输入。
+插件负责通过 CoreBluetooth 连接设备、重组和解码音频、创建 Vokie 录音会话、回传状态，并把设备按键映射为编辑命令。虽然固件编译不依赖 Vokie，但设备自身不提供语音识别、AI 润色和文字输入能力。
+
+公开的 [AI Passport BLE V1 协议](docs/ai-passport-ble-protocol.zh_CN.md)用于集成与开发；第三方宿主不是当前面向普通用户支持的使用路径。
 
 ## 按键
 

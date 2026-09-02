@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- Replaced the hardware-demo menu with the Vokie AI Passport voice firmware: a documented BLE V1 peripheral, 16 kHz mono IMA ADPCM transport, physical PTT/edit controls, host-driven status UI, and three-stage backlight power saving.
+- Added a fork-specific project README, BLE protocol reference, third-party notices, and separate Vokie brand-asset terms for public distribution.
+- Removed the inherited upstream-sync workflow from this standalone derivative; downstream forks update from the public repository through an explicit reviewed merge.
+
 - Reorganized the documentation by function area with a dual entry point: the root `AGENTS.md` is now a thin router (hard constraints + task routing only) and the detailed AI workflow lives in `docs/development/ai-guide.md`; `agent-guide.md` was folded in. `docs/development/` gained a second level (`engineering/`, `ci/`, `release/`), and the `plays/` application archive and `experiences/` moved into a `docs/reference/` area with a dedicated README. Removed `docs/software-design/` (empty scaffold); folded the three `assets/{fonts,images,music}/README` leaves into the `assets/` README; flattened the six `project-completion` sub-documents into a single file; and unified each directory to a single README, eliminating every `INDEX` file and a duplicated experience index. All cross-references and bibliographic links were updated; no content was dropped.
 
 - Made mini-program BLE install compatibility a template-level invariant: fixed

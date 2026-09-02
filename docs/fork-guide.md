@@ -4,32 +4,53 @@
 
 # Fork Workflow
 
-The upstream repository keeps `main` as the current FoloToy baseline. Fork-specific firmware belongs on `feature/*` branches so a fork can continuously synchronize its `main` without mixing product work into the baseline.
+This repository keeps `main` as the current public Vokie AI Passport firmware
+baseline. Fork-specific product work belongs on `feature/*` branches so a fork
+can synchronize its `main` without mixing local changes into the public
+baseline.
 
 ## Repository roles
 
 ```text
-docs/                  product, contribution, development, and design documents
+README.md              fork product overview and integration requirements
+docs/                  protocol, hardware, engineering, and contribution docs
 components/bsp/        stable board APIs and hardware implementation
-main/                  LVGL menu and independent demo pages
-assets/                reusable fonts, images, music, and sound effects
+main/                  Vokie BLE peripheral, audio transport, and status UI
+assets/                reusable source assets
 skills/                reusable AI-agent skills
-tests/                 host-runnable logic tests
+tests/                 host-runnable tests
 sdkconfig.defaults     reproducible ESP32-C3 defaults
 ```
 
-The root `README.md` path is intentionally available to a fork owner. Upstream's project overview is `docs/README.md`, which GitHub displays when no root README exists. A fork may add its own root README to explain its product without replacing upstream documentation.
+## Recommended workflow
 
-## Fork rules
+1. Fork `alanshen6666-collab/vokie-ai-passport-firmware`.
+2. Keep the fork's `main` synchronized with the public repository's `main`.
+3. Create each change from the latest `main` on a short-lived `feature/*` or
+   `fix/*` branch.
+4. Run `./tools/validate.sh` with ESP-IDF 5.5.3 before opening a pull request.
+5. Merge through a reviewed pull request instead of developing directly on
+   `main`.
 
-- Keep fork `main` synchronized with `FoloToy/ai-passport:main`.
-- On fork `main`, limit fork-owned content to a root `README.md` pair and `docs/assets/`; develop firmware and other changes on `feature/*` branches and merge by pull request.
-- **Before starting a new project, create the `feature/*` branch from a base that stays aligned with `FoloToy/ai-passport:main`.** Use the latest upstream `main` as the branch-off point (e.g. fetch upstream then branch from `upstream/main`), not the fork's own `main` — the fork `main` may be stale or unable to sync. This keeps every new project on the current upstream baseline and avoids basing work on a stale or diverged fork `main`.
-- Enable GitHub Actions manually after forking. The upstream-sync workflow is disabled by GitHub until the fork owner enables it.
-- If development must happen directly on `main`, disable `.github/workflows/sync-main.yml` first to prevent automatic merge conflicts.
+This standalone repository does not automatically synchronize with FoloToy.
+To update a downstream fork, fetch this repository explicitly, review the diff,
+and merge the public `main` through the fork's normal pull-request workflow.
 
-Use `docs/assets/` for architecture notes, product design, and images that supplement a fork's README. Upstream keeps that directory empty except for `.gitkeep`; fork-private content must not be proposed back to upstream.
+## Upstream attribution
 
-Documentation and experience follow the same split. Fork-specific product customization (architecture notes, product design, fork-only assets) stays in the fork under `docs/assets/` and is not proposed back upstream. General, upstream-benefiting documentation or experience improvements — durable facts, reusable interfaces, build or release-flow improvements that help any AI Passport user — are submitted back upstream as a pull request. The `plays/` application archive and the post-release experience notes belong upstream and are proposed back as pull requests. Use the `experience-pr` and `plays-archive` skills for post-release work; see `docs/development/release/project-completion.md`.
+This firmware is derived from
+[FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) and preserves its
+MIT license and Git history. Reusable changes to the hardware baseline may be
+proposed to FoloToy separately; Vokie-specific firmware, protocol, UI, and brand
+assets belong in this repository.
 
-All fork documentation follows the repository language rule: English at the default `.md` path and Simplified Chinese at `.zh_CN.md`, with reciprocal switches.
+## Documentation and assets
+
+Keep English at each default `.md` path and Simplified Chinese in a paired
+`.zh_CN.md` file with reciprocal language links. Put product-specific design
+notes under `docs/` and reusable binary/source assets under `assets/`.
+
+The Vokie name and symbol are excluded from MIT. Forks may redistribute the
+unmodified symbol only under
+[`LICENSES/Vokie-Brand-Asset.txt`](../LICENSES/Vokie-Brand-Asset.txt); replacing
+or extracting it for another brand requires separate permission.

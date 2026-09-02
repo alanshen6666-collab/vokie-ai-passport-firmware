@@ -30,7 +30,7 @@ body:
     attributes:
       label: Affected area / 涉及范围
       options:
-        - Firmware or demo / 固件或示例
+        - Firmware application / 固件应用
         - BSP or hardware interface / BSP 或硬件接口
         - Documentation or tooling / 文档或工具
         - Hardware revision / 硬件版本

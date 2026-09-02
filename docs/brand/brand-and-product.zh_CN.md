@@ -12,11 +12,13 @@
 
 ## 1. 品牌与产品
 
-- **产品名**：**AI Passport**（英文全称 *FoloToy AI Passport*，官网英文名 "AI Passport | Open Wearable AI Agent"）。
+- **硬件产品名**：**AI Passport**（英文全称 *FoloToy AI Passport*，官网英文名 "AI Passport | Open Wearable AI Agent"）。
   - 名称统一写 `AI Passport`，不翻译、不加后缀、不派生变体；中文语境同样用「AI Passport」，不另造译名。
-- **品牌主体**：**FoloToy**（"We are creating AI toys"，创造 AI 玩具）。
+- **品牌与硬件上游**：**FoloToy**（"We are creating AI toys"，创造 AI 玩具）。
   - GitHub 组织：`github.com/FoloToy`
-- **产品开源仓库**：`github.com/FoloToy/ai-passport`——AI Passport 的开源**开发基线**，集中存放已确认的硬件事实、稳定接口、资源边界、参考实现与验收方法。
+- **当前 Vokie 固件仓库**：`github.com/alanshen6666-collab/vokie-ai-passport-firmware`。
+- **硬件/上游源码仓库**：`github.com/FoloToy/ai-passport`——AI Passport 的开源**开发基线**，集中存放已确认的硬件事实、稳定接口、资源边界、参考实现与验收方法。
+- Vokie 固件是独立衍生项目，不是 FoloToy 官方发布，也不代表 FoloToy 背书。
 
 ## 2. 产品定位
 
@@ -84,9 +86,10 @@ FoloToy 提供两处浏览器刷机入口，均可安全写入本地固件，固
 
 ## 5. 开源与授权
 
-- 产品开源仓库：`github.com/FoloToy/ai-passport`。
-- 协议：**MIT License**（Copyright (c) 2026 FoloToy）。
-- 仓库常被 fork 后二次开发；fork 约定见仓库 `docs/fork-guide.md`。
+- 当前 Vokie 固件仓库：`github.com/alanshen6666-collab/vokie-ai-passport-firmware`。
+- 硬件/上游源码仓库：`github.com/FoloToy/ai-passport`。
+- 软件协议：**MIT License**（保留 `Copyright (c) 2026 FoloToy`）。Vokie 名称和图形标识另受 [`LICENSES/Vokie-Brand-Asset.txt`](../../LICENSES/Vokie-Brand-Asset.txt) 约束。
+- 本固件是独立衍生项目，不是 FoloToy 官方发布；fork 约定见仓库 `docs/fork-guide.md`。
 
 ## 6. 命名与多语言
 

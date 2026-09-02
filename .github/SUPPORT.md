@@ -4,10 +4,10 @@
 
 # Support
 
-FoloToy AI Passport is open-source hardware and firmware. The community can help
-confirm reproducible issues and discuss improvements, but one-to-one
-troubleshooting for every custom hardware setup or commercial support is not
-guaranteed.
+Vokie AI Passport is open-source firmware for FoloToy AI Passport hardware. The
+community can help confirm reproducible issues and discuss improvements, but
+one-to-one troubleshooting for every custom hardware setup or commercial support
+is not guaranteed.
 
 ## Where to start
 

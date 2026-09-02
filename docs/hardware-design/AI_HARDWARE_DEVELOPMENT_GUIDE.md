@@ -2,7 +2,7 @@
   <a href="AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# FoloToy AI Passport Hardware Development Guide
+# FoloToy AI Passport Hardware Guide for Vokie Firmware
 
 This is the board-level context for AI coding assistants and new developers. It records confirmed hardware facts, software architecture, invariants, extension points, and acceptance methods; it does not replace component datasheets.
 
@@ -10,15 +10,15 @@ This is the board-level context for AI coding assistants and new developers. It 
 
 Document scope:
 
-- Applicable target: the ESP32-C3 FoloToy AI Passport mapping implemented by this repository.
-- Product specifications are in [specifications.md](specifications.md); firmware behavior follows `bsp_pins.h`, BSP implementations, `sdkconfig.defaults`, `partitions.csv`, and the demo code.
-- Code audit date: 2026-08-26.
+- Applicable target: the ESP32-C3 FoloToy AI Passport mapping used by this repository.
+- Product specifications are in [specifications.md](specifications.md); firmware behavior follows `bsp_pins.h`, BSP implementations, `sdkconfig.defaults`, `partitions.csv`, and the Vokie application sources.
+- Code audit date: 2026-09-02.
 
 ## 1. Before changing hardware-facing code
 
 1. Read `AGENTS.md`, this guide, and the affected BSP header/implementation.
 2. Run `git status --short --branch` and preserve unrelated changes.
-3. Put reusable hardware behavior in `components/bsp`; keep menu, animation, product interaction, and validation pages in `main`.
+3. Put reusable hardware behavior in `components/bsp`; keep Vokie product interaction, BLE transport, and status UI in `main`.
 4. Keep pins, I2C addresses, and panel dimensions in `bsp_pins.h` only.
 5. Keep hardware-facing changes within the product specification and explicit BSP definitions.
 
@@ -29,14 +29,14 @@ The target is the ESP32-C3 FoloToy AI Passport with ESP-IDF 5.5.3. It has 8 MB F
 | Subsystem | Device or mode | Resource | Firmware support |
 | --- | --- | --- | --- |
 | MCU | ESP32-C3 | 8 MB Flash, no PSRAM | Configured |
-| Display | ST7789P3, 240 × 320, RGB565 | SPI2, 40 MHz, mode 0 | Driver and validation page |
-| Backlight | LCD LED | GPIO21, LEDC 5 kHz/10 bit | PWM brightness control |
-| Buttons | UP/DOWN/OK resistor ladder | GPIO0 / ADC1_CH0 | Events and live-voltage page |
-| Audio | ES8311 playback and microphone | shared I2C + I2S0 full duplex | Playback and recording page |
-| Battery | CW2017 fuel gauge | shared I2C0, address `0x63` | Optional SOC and voltage driver |
-| Wi-Fi | 2.4 GHz station | initialized by the demo | Scan page |
-| Bluetooth LE | NimBLE peripheral | initialized by the demo | Non-connectable advertising page |
-| Low power | light/deep sleep | RTC timer wake | 2 s light and 5 s deep-sleep modes |
+| Display | ST7789P3, 240 × 320, RGB565 | SPI2, 40 MHz, mode 0 | Status UI |
+| Backlight | LCD LED | GPIO21, LEDC 5 kHz/10 bit | Activity and timeout brightness policy |
+| Buttons | UP/DOWN/OK resistor ladder | GPIO0 / ADC1_CH0 | PTT, send, delete, clear, and cancel events |
+| Audio | ES8311 microphone capture | shared I2C + I2S0 full duplex | 16 kHz mono PCM for BLE transport |
+| Battery | CW2017 fuel gauge | shared I2C0, address `0x63` | BSP driver available; not used by the current status UI |
+| Wi-Fi | Not used by the current firmware | no Wi-Fi application path | Not compiled into the Vokie application |
+| Bluetooth LE | NimBLE peripheral | Vokie BLE V1 service | Connectable advertising and notifications |
+| Low power | Backlight timeout only | ESP-IDF timer + FreeRTOS task | No light/deep-sleep application mode |
 | Console | USB Serial/JTAG | native USB GPIO18/19 | Configured |
 
 ## 3. Pin map and resource ownership
@@ -72,9 +72,9 @@ LCD reset and amplifier enable are `-1`: display reset uses software reset, and 
 | I2C0 | `bsp_i2c` | ES8311 and CW2017 share the single bus handle; clients must not recreate the bus. |
 | I2S0 | audio BSP | TX and RX are full duplex and share MCLK/BCLK/WS. |
 | USB Serial/JTAG | console configuration | GPIO18/19 are part of the selected console path. |
-| Internal RAM/DMA | display, LVGL, audio, radio, tasks | No PSRAM exists; total free heap and largest contiguous block both matter. |
-| NVS/network event loop | `demo_radio.c` | Prepared once for Wi-Fi/BLE demos; do not erase unrelated NVS data on initialization errors. |
-| Wi-Fi/BLE stacks | individual demo pages | Current demos start on page entry and deinitialize on exit; the stacks do not remain active together. |
+| Internal RAM/DMA | display, LVGL, audio, NimBLE, tasks | No PSRAM exists; total free heap and largest contiguous block both matter. |
+| NVS | `app_main` and ESP-IDF services | Initialize without erasing provisioned identity data; preserve the protected partition contract. |
+| NimBLE | `vokie_ble.c` | One connectable Vokie BLE V1 peripheral; audio and control notifications share one connection. |
 
 GPIO0 is both the button ADC node and an ESP32-C3 boot-related pin. GPIO21 is the backlight output and conflicts with the commonly used UART0 TX mapping. Pin reassignment requires boot/programming-path review and on-device acceptance.
 
@@ -89,17 +89,17 @@ GPIO0 is both the button ADC node and an ESP32-C3 boot-related pin. GPIO21 is th
 
 ```text
 app_main
-  ├─ shared I2C init and scan
-  ├─ display and LVGL init, then backlight
-  ├─ button init
-  ├─ audio init
-  ├─ battery init
-  └─ LVGL menu and independent demo pages
+  ├─ shared I2C init
+  ├─ display and LVGL init, then status UI
+  └─ Vokie BLE V1 init
+       ├─ button events
+       ├─ microphone PCM capture
+       └─ control/audio notifications
 ```
 
-Display/LVGL is a hard dependency. Buttons, audio, and battery are soft dependencies whose pages show `[FAIL]` while other pages remain available. Public BSP APIs are under `components/bsp/include/`; most initialization is idempotent, but there is no universal BSP deinitialization API.
+Display/LVGL is a hard dependency for the status UI. Audio and buttons are initialized by `vokie_ble_start()`; failure is logged and the application cannot provide voice input. The CW2017 driver remains available through the BSP but is not initialized by the current Vokie application. Public BSP APIs are under `components/bsp/include/`; most initialization is idempotent, but there is no universal BSP deinitialization API.
 
-Wi-Fi, NimBLE, and sleep use ESP-IDF directly rather than the BSP. `demo_radio.c` owns shared NVS, `esp_netif`, and default-event-loop setup. Wi-Fi and Bluetooth pages allocate their radio stacks on entry and stop/deinitialize them on exit. Do not erase NVS to hide partition errors. Deep sleep restarts the application and the demo uses RTC slow memory for the wake counter.
+NimBLE, the Vokie BLE V1 service, and the audio worker use ESP-IDF directly rather than the BSP. The application maintains one connectable BLE session, requires both control and audio notifications to be subscribed, and sends 20 ms microphone frames only after the host is ready. Do not erase NVS to hide partition errors; the protected identity and Recovery layout is outside the community application image.
 
 ## 5. Display and LVGL
 
@@ -141,7 +141,7 @@ Troubleshoot in order: bus-init log, scan results for `0x18`/`0x63`, power/groun
 
 ## 8. ES8311 audio
 
-The MCU is I2S master and the ES8311 is slave. I2S0 TX/RX shares MCLK GPIO6, BCLK GPIO5, and WS GPIO3; DOUT is GPIO2 and DIN is GPIO4. The demo opens 16 kHz, 16-bit, mono PCM over a physically two-slot standard-I2S bus.
+The MCU is I2S master and the ES8311 is slave. I2S0 TX/RX shares MCLK GPIO6, BCLK GPIO5, and WS GPIO3; DOUT is GPIO2 and DIN is GPIO4. The Vokie application opens 16 kHz, 16-bit, mono PCM over a physically two-slot standard-I2S bus.
 
 - Call `bsp_audio_set_format()` before PCM I/O.
 - A format change must close and reopen `esp_codec_dev`; an already open device is not reconfigured.
@@ -152,7 +152,7 @@ The MCU is I2S master and the ES8311 is slave. I2S0 TX/RX shares MCLK GPIO6, BCL
 - `bsp_audio_read/write` block and must not run in button callbacks or the LVGL task.
 - I2S DMA uses six descriptors of 240 frames each.
 
-The audio demo's three-second recording buffer is about 96 KB and is the largest transient heap allocation. Prefer chunked streaming for longer audio. Production task shutdown needs a cancellable loop and explicit exit handshake rather than deleting a task blocked in codec I/O.
+The Vokie audio worker keeps one 320-sample PCM buffer and one 166-byte ADPCM buffer on its task stack, then streams each encoded 20 ms frame over BLE. Keep capture bounded and cancellable; do not replace this path with a large recording buffer or delete a task that may be blocked in codec I/O.
 
 ## 9. CW2017 fuel gauge
 
@@ -161,7 +161,7 @@ Initialization reads VERSION, writes CONFIG `0x00`, waits 100 ms, and uses the c
 - SOC uses registers `0x04–0x05`; values above 100 are treated as not ready and return `-1`.
 - Voltage uses the 14-bit value at `0x02–0x03`, converted as `raw × 312.5 µV`, and returned in mV.
 - Transactions use a 100 ms timeout at 100 kHz.
-- A missing device returns `ESP_ERR_NOT_FOUND`; the battery page is disabled without stopping the application.
+- A missing device returns `ESP_ERR_NOT_FOUND`; the current Vokie status UI does not depend on the battery driver and continues without a battery reading.
 
 Accurate production SOC requires the cell parameters, CW2017 datasheet/vendor profile, and full charge/discharge validation.
 
@@ -175,15 +175,13 @@ payload. See the [BLE compatibility contract](../development/engineering/ble-rec
 
 The console is USB Serial/JTAG. Do not switch to the UART0 default output without resolving its GPIO21 conflict with the backlight.
 
-Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, 96 KB demo recording, radio stacks, task stacks, total free heap, and largest contiguous block when adding assets, TLS/networking, audio buffers, or double buffering.
+Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, NimBLE host/controller, the 320-sample audio worker buffers, task stacks, total free heap, and largest contiguous block when adding assets, networking, audio buffers, or double buffering.
 
 ## 11. Adding features
 
 For reusable hardware capability, add `bsp_<feature>.h` and its implementation, keep constants in `bsp_pins.h`, update component CMake/dependencies, return `esp_err_t`, log actionable pin/address context, and document threading, blocking, ownership, initialization, and failure behavior.
 
-For a validation page, implement `enter`, `exit`, and `key` in `main/demo_<feature>.c`; declare it in `demo.h`, list it in CMake, and register it in `DEMOS[]`. Create/load a page-owned screen on entry. Stop workers/timers before deleting it on exit. Keep UI text in English, put slow work in worker tasks, lock LVGL updates, and preserve global OK-long-press return behavior.
-
-Menu initialization status arrays implicitly follow `DEMOS[]` order; update and review them together.
+For a Vokie application feature, extend the relevant module under `main/` and keep its public behavior documented. Preserve the BLE V1 wire format, host lifecycle, button contract, status states, and backlight policy unless the product requirement explicitly changes them. Keep blocking audio and BLE work in worker/task contexts and guard LVGL updates with the existing lock.
 
 ## 12. Development environment
 
@@ -218,24 +216,24 @@ The actual port may differ. Check the cable, enumeration, permissions, power, an
 
 Run `./tools/validate.sh` for the complete automated gate. A successful build is the minimum automated result, not physical-device acceptance.
 
-General board acceptance:
+General board acceptance for this firmware:
 
 - Stable USB Serial/JTAG logs without reboot loops, assertions, watchdogs, or persistent errors.
 - I2C scan sees ES8311 at `0x18` and, when fitted, CW2017 at `0x63`.
-- UP/DOWN wraps menu navigation, OK click enters, and OK long press returns.
-- An optional peripheral failure disables only its page.
-- Repeated navigation and operation do not leak heap, tasks, timers, or objects.
+- A host sees `Vokie Passport`, connects, subscribes to Control and Audio, and receives `hello`.
+- `UP` starts/stops capture, `DOWN` sends Enter, and `OK` deletes, cancels, or clears according to the documented state.
+- Non-zero microphone audio is captured at 16 kHz and arrives as reassembled IMA ADPCM frames.
+- Backlight returns to the active level on a key action and follows the dim/off timeout policy.
+- Repeated connect, record, submit, cancel, and disconnect cycles do not leak heap, tasks, timers, or objects.
 
 | Change | Required physical observations |
 | --- | --- |
 | Pin/I2C | scan, all shared devices, boot straps, USB logs |
 | LCD | color blocks, orientation, clipping, inversion, byte order, backlight levels |
-| ADC/buttons | released and pressed mV, click/double/long events, margin across battery levels |
-| Codec/I2S | 1 kHz tone, non-zero recording, correct playback speed, format changes, page exit |
-| Battery | plausible SOC/mV, graceful missing-device behavior, intermittent-I2C recovery |
-| Wi-Fi | visible scan count/SSID/RSSI, rescan, repeated entry/exit |
-| Bluetooth LE | phone sees `FoloPassport`, restart advertising, advertising stops on exit, repeated entry/exit |
-| Light/deep sleep | select with UP/DOWN; 2 s light sleep resumes with backlight; 5 s deep sleep restarts with timer cause and retained count |
+| ADC/buttons | released and pressed mV, UP/DOWN/OK click/long events, margin across battery levels |
+| Codec/I2S | non-zero 16 kHz capture, correct frame timing, format setup, disconnect/stop behavior |
+| Battery | plausible SOC/mV when the BSP driver is explicitly exercised, graceful missing-device behavior |
+| Bluetooth LE | `Vokie Passport` advertising, connection, subscriptions, hello, notifications, reconnect |
 | DMA/memory/UI | build memory report, runtime minimum heap/largest block, stable concurrent audio/display |
 
 ## 14. Troubleshooting
@@ -252,11 +250,11 @@ General board acceptance:
 | Only ES8311 missing | address API shift and codec power |
 | Audio speed/pitch wrong | close/open on format change, sample rate/MCLK, no manual clock writes |
 | Recording is zero | `no_dac_ref`, DIN GPIO4, microphone path, gain |
-| Recording allocation fails | no PSRAM; shorten/stream and inspect largest block |
-| Battery shows `--` | `0x63` response, invalid SOC, profile/startup delay |
-| Wi-Fi/BLE fails on second entry | stack stop/deinit and one-time NVS/event-loop setup |
-| Black after light sleep | timer wake source, sleep error, backlight restore |
-| Deep sleep does not restart | timer source, boot wake cause, RTC counter |
+| Recording allocation fails | no PSRAM; keep capture streaming and inspect largest block |
+| Battery read fails | `0x63` response, invalid SOC, profile/startup delay |
+| BLE host cannot connect | advertising fields, service UUID, MTU, single-connection state |
+| BLE audio is missing | both notifications subscribed, host-ready message, MTU at least 185, audio worker state |
+| Backlight does not wake | key-event touch timestamp, LVGL status task, GPIO21/LEDC ownership |
 | I2S allocation fails after UI growth | competition among LCD/LVGL buffers and I2S DMA |
 | Chinese text appears as boxes | Montserrat 14/20 has no CJK glyphs; compile and select a CJK subset, configure fallback for mixed text, and verify glyph coverage on the device |
 

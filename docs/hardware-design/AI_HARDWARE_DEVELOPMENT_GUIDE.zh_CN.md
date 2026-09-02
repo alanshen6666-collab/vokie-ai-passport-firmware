@@ -2,7 +2,7 @@
   <strong>简体中文</strong> · <a href="AI_HARDWARE_DEVELOPMENT_GUIDE.md">English</a>
 </p>
 
-# FoloToy AI Passport AI 硬件开发指南
+# Vokie 固件的 FoloToy AI Passport 硬件指南
 
 本文是面向 AI 编程助手和新开发者的板级上下文入口。目标不是替代数据手册，而是准确说明**当前仓库已经确认的硬件事实、软件架构、不可随意改变的约束、扩展方式和验收方法**。
 
@@ -10,9 +10,9 @@
 
 文档适用范围：
 
-- 适用对象：本仓库实现的 ESP32-C3 FoloToy AI Passport 板级映射。
-- 产品规格见 [specifications.zh_CN.md](specifications.zh_CN.md)；固件行为以 `bsp_pins.h`、BSP 实现、`sdkconfig.defaults`、`partitions.csv` 与 demo 代码为准。
-- 代码复核日期：2026-08-26。
+- 适用对象：本仓库使用的 ESP32-C3 FoloToy AI Passport 板级映射。
+- 产品规格见 [specifications.zh_CN.md](specifications.zh_CN.md)；固件行为以 `bsp_pins.h`、BSP 实现、`sdkconfig.defaults`、`partitions.csv` 与 Vokie 应用源码为准。
+- 代码复核日期：2026-09-02。
 
 ## 1. 开始任何任务前
 
@@ -31,14 +31,14 @@ AI 应先完成以下检查：
 | 子系统 | 器件/方式 | 总线或资源 | 固件支持 |
 | --- | --- | --- | --- |
 | MCU | ESP32-C3 | 8 MB Flash、无 PSRAM | 已配置 |
-| 显示 | ST7789P3，240 × 320，RGB565 | SPI2，40 MHz，mode 0 | 驱动与验证页 |
-| 背光 | LCD LED 背光 | GPIO21，LEDC 5 kHz/10 bit | PWM 亮度控制 |
-| 按键 | UP/DOWN/OK 三键电阻分压 | GPIO0 / ADC1_CH0 | 事件与实时电压页 |
-| 音频 | ES8311，播放 + 麦克风录音 | I2C 控制 + I2S0 全双工 | 播放与录音页 |
-| 电池 | CW2017 电量计 | 共享 I2C0，地址 0x63 | 可缺省 SOC/电压驱动 |
-| Wi-Fi | ESP32-C3 2.4 GHz STA | 应用页按需初始化 | 扫描页 |
-| Bluetooth LE | ESP32-C3 NimBLE peripheral | 应用页按需初始化 | 不可连接广播页 |
-| 低功耗 | ESP32-C3 light/deep sleep | RTC timer 唤醒 | 2 秒 light sleep 和 5 秒 deep sleep 模式 |
+| 显示 | ST7789P3，240 × 320，RGB565 | SPI2，40 MHz，mode 0 | 状态界面 |
+| 背光 | LCD LED 背光 | GPIO21，LEDC 5 kHz/10 bit | 活动与超时亮度策略 |
+| 按键 | UP/DOWN/OK 三键电阻分压 | GPIO0 / ADC1_CH0 | PTT、发送、删除、清空与取消事件 |
+| 音频 | ES8311 麦克风采集 | I2C 控制 + I2S0 全双工 | 用于 BLE 传输的 16 kHz 单声道 PCM |
+| 电池 | CW2017 电量计 | 共享 I2C0，地址 0x63 | BSP 驱动可用；当前状态界面未使用 |
+| Wi-Fi | 当前固件不使用 | 没有 Wi-Fi 应用链路 | 未编译进 Vokie 应用 |
+| Bluetooth LE | NimBLE 外设 | Vokie BLE V1 服务 | 可连接广播与 Notification |
+| 低功耗 | 仅背光超时 | ESP-IDF timer + FreeRTOS task | 没有 light/deep sleep 应用模式 |
 | 日志 | USB Serial/JTAG | 原生 USB GPIO18/19 | 已配置 |
 
 ## 3. 引脚表与资源所有权
@@ -76,9 +76,9 @@ LCD RST 和功放 PA 使能均定义为 `-1`：LCD 复位使用软件路径，�
 | I2C0 | `bsp_i2c` | ES8311 与 CW2017 共用唯一 bus handle，客户端不得重建总线。 |
 | I2S0 | 音频 BSP | TX/RX 全双工，共用 MCLK/BCLK/WS。 |
 | USB Serial/JTAG | 控制台配置 | GPIO18/19 属于当前控制台路径。 |
-| 内部 RAM/DMA | 显示、LVGL、音频、无线、任务 | 无 PSRAM；总空闲堆和最大连续块都必须检查。 |
-| NVS/网络 event loop | `demo_radio.c` | 为 Wi-Fi/BLE demo 一次性准备；初始化失败时不得擦除无关 NVS 数据。 |
-| Wi-Fi/BLE 协议栈 | 各自 demo 页面 | 当前页面进入时启动、退出时释放，不同时常驻。 |
+| 内部 RAM/DMA | 显示、LVGL、音频、NimBLE、任务 | 无 PSRAM；总空闲堆和最大连续块都必须检查。 |
+| NVS | `app_main` 与 ESP-IDF 服务 | 初始化时不得擦除已写入的设备身份；必须保留保护分区契约。 |
+| NimBLE | `vokie_ble.c` | 单连接的 Vokie BLE V1 外设；音频与控制 Notification 共用该连接。 |
 
 GPIO0 同时是按键 ADC 节点和 ESP32-C3 启动相关管脚；GPIO21 是背光输出，并与常见 UART0 TX 映射冲突。重分配引脚必须复核启动/烧录路径并完成实机验收。
 
@@ -93,24 +93,16 @@ GPIO0 同时是按键 ADC 节点和 ESP32-C3 启动相关管脚；GPIO21 是背�
 
 ```text
 app_main
-  ├─ bsp_i2c_init → bsp_i2c_scan
-  ├─ bsp_display_init → bsp_lvgl_init → backlight 100%
-  ├─ bsp_button_init(on_key)
-  ├─ bsp_audio_init
-  ├─ bsp_battery_init
-  └─ LVGL menu
-       ├─ Display demo
-       ├─ Button demo
-       ├─ Audio demo
-       ├─ Battery demo
-       ├─ Wi-Fi scan demo
-       ├─ Bluetooth LE advertising demo
-       └─ Low Power sleep-mode demo
+  ├─ bsp_i2c_init
+  ├─ bsp_display_init → bsp_lvgl_init → backlight 65%
+  └─ vokie_ble_start
+       ├─ bsp_audio_init → 16 kHz mono format
+       ├─ bsp_button_init(on_key)
+       ├─ NimBLE Vokie BLE V1 service
+       └─ control/audio notifications
 ```
 
-显示是 UI 的硬依赖，显示或 LVGL 初始化失败时 `app_main` 直接返回。按键、音频、电池是软依赖：初始化失败的菜单项显示 `[FAIL]`，其他页面仍可用。
-
-公开 BSP API 位于 `components/bsp/include/`：
+显示/LVGL 是状态界面的硬依赖。音频和按键由 `vokie_ble_start()` 初始化；初始化失败会记录错误，设备无法提供语音输入。CW2017 驱动仍可通过 BSP 使用，但当前 Vokie 应用不会初始化它。公开 BSP API 位于 `components/bsp/include/`：
 
 - `bsp_i2c.h`：共享总线初始化、句柄和扫描。
 - `bsp_display.h`：LCD、背光以及可选 LVGL 接入。
@@ -121,7 +113,7 @@ app_main
 
 驱动初始化大多设计为幂等，但当前没有统一 deinit API。不要假设可以在运行时反复销毁和重建总线/驱动。
 
-Wi-Fi、NimBLE 和 light/deep sleep 直接使用 ESP-IDF API，不属于板级 BSP。`demo_radio.c` 只管理 NVS、`esp_netif` 和默认 event loop 这些应用级共享前置。Wi-Fi 和 BLE 页在进入时初始化高内存占用的无线栈，退出时停止并释放；不自动抹除已有 NVS 数据来掩盖分区错误。deep sleep 会按 ESP32-C3 语义重启应用，示例用 RTC slow memory 记录唤醒次数。
+NimBLE、Vokie BLE V1 服务和音频工作任务直接使用 ESP-IDF API，不属于板级 BSP。当前应用只维护一个可连接 BLE 会话，要求主机同时订阅 Control 与 Audio Notification，并在主机就绪后发送音频帧。不要通过擦除 NVS 来掩盖分区错误；设备身份与 Recovery 保护布局不属于社区应用镜像。
 
 ## 5. 显示与 LVGL
 
@@ -145,7 +137,7 @@ LVGL 非线程安全：
 - 按键回调运行在 button 组件任务中，必须 `bsp_lvgl_lock()` / `bsp_lvgl_unlock()`。
 - 音频任务等其他 FreeRTOS 任务同样必须加锁。
 - 获取锁失败时应安全退出，且每条成功加锁路径都必须解锁。
-- 页面退出时先停止可能访问页面对象的定时器/任务，再删除 screen，并将静态对象指针置空。
+- 退出状态界面时先停止可能访问界面对象的定时器/任务，再删除 screen，并将静态对象指针置空。
 
 `swap_bytes=true` 是必要配置：LVGL 产生小端 RGB565，而 LCD 的 SPI 数据需要高字节在前。颜色异常时应先核对该标志、RGB/BGR 顺序、反色和面板序列，不要一次修改多个变量。
 
@@ -168,9 +160,9 @@ LVGL 非线程安全：
 - ADC 衰减为 `ADC_ATTEN_DB_12`，必须与依赖的 button 组件内部配置保持一致。升级组件后要重新核对。
 - ADC 校准句柄创建失败不影响按键事件，但 `bsp_button_read_mv()` 返回 `-1`。
 - 回调来自 button 组件的定时器任务，不能阻塞、录音、播放或直接做重 UI 操作。
-- 事件包括 PRESS、CLICK、DOUBLE、LONG。应用菜单主要消费 CLICK；页面中的 OK LONG 被全局拦截用于返回。
+- 事件包括 PRESS、CLICK、DOUBLE、LONG。Vokie 应用主要消费 CLICK；OK 的 LONG/CLICK 由录音和编辑状态共同处理。
 
-重标阈值时，在 Button 页逐个长按按键记录稳定电压，采集多块板、不同电量和合理温度范围的数据，再把相邻分布之间留裕量设置为边界。不要只用理论分压值。
+重标阈值时，逐个长按按键记录稳定电压，采集多块板、不同电量和合理温度范围的数据，再把相邻分布之间留裕量设置为边界。不要只用理论分压值。
 
 ## 7. 共享 I2C
 
@@ -188,7 +180,7 @@ I2C0 使用 SDA GPIO10、SCL GPIO7。ES8311 地址为 7 bit `0x18`，CW2017 为 
 
 ## 8. ES8311 音频
 
-MCU 是 I2S master，ES8311 是 slave；I2S0 的 TX/RX 全双工通道共享 MCLK/BCLK/WS。当前数据通路为标准 I2S、16 bit slot 设置、双 slot 物理总线，但对外演示以 16 kHz/16 bit/单声道 PCM 打开 codec。
+MCU 是 I2S master，ES8311 是 slave；I2S0 的 TX/RX 全双工通道共享 MCLK/BCLK/WS。当前数据通路为标准 I2S、16 bit slot 设置、双 slot 物理总线，Vokie 应用以 16 kHz/16 bit/单声道 PCM 打开 codec。
 
 | 信号 | GPIO | 数据方向 |
 | --- | ---: | --- |
@@ -209,9 +201,7 @@ MCU 是 I2S master，ES8311 是 slave；I2S0 的 TX/RX 全双工通道共享 MCL
 - `bsp_audio_read/write` 是阻塞调用，不能放在按键回调或 LVGL 任务中。
 - I2S DMA 当前为 6 个 descriptor、每个 240 frame。更改 DMA 或 LVGL buffer 前必须联合评估内部 RAM。
 
-Audio demo 使用独立 4 KB 栈任务：OK 播放 1 秒 1 kHz 方波，UP 录 3 秒再回放。录音缓冲约 96 KB，是当前最显著的瞬时堆分配，可能因碎片或其他功能增大而失败。新增长录音应优先采用分块流式处理或外部存储，不可假设存在 PSRAM。
-
-当前 demo 的退出会直接删除音频任务。如果任务正阻塞于 codec 读写，实际硬件上需特别验证退出行为；若扩展为生产逻辑，应设计可取消的分块循环与明确的任务退出握手。
+Vokie 音频任务在任务栈上使用一个 320-sample PCM 缓冲和一个 166-byte ADPCM 缓冲，把每个编码后的 20 ms 帧流式发送到 BLE。采集应保持有界且可取消；不要改回大录音缓冲，也不要删除可能阻塞在 codec I/O 上的任务。
 
 ## 9. CW2017 电池计
 
@@ -220,7 +210,7 @@ CW2017 在共享 I2C 地址 0x63。初始化读取 VERSION 确认在线，将 CO
 - SOC：读 0x04–0x05，仅返回高字节整数百分比；大于 100 视为未就绪并返回 `-1`。
 - 电压：读 0x02–0x03 的 14 bit 值，换算为 `raw × 312.5 µV`，API 返回 mV。
 - 事务超时当前为 100 ms，设备时钟为 100 kHz。
-- 芯片不应答时初始化返回 `ESP_ERR_NOT_FOUND`，菜单标记失败，但整机继续运行。
+- 芯片不应答时初始化返回 `ESP_ERR_NOT_FOUND`；当前 Vokie 状态界面不依赖电池驱动，没有电量读数也能继续运行。
 
 SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是电量计读数，不等于实验室标定结果。若产品需要准确 SOC，必须取得电芯参数、CW2017 数据手册和供应商 profile，并完成完整充放电验证。
 
@@ -238,8 +228,8 @@ SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是�
 - LVGL 静态内存池 24 KB；
 - LCD DMA buffer 约 9.6 KB；
 - I2S DMA descriptor/frame buffer；
-- Audio demo 96 KB 录音堆；
-- Wi-Fi 驱动或 NimBLE host/controller（两个示例不同时常驻）；
+- Vokie 音频任务的 320-sample PCM 与 166-byte ADPCM 缓冲；
+- NimBLE host/controller；
 - 各 FreeRTOS 任务栈和最大连续空闲块。
 
 新增图片、字体、网络栈、TLS、音频缓存或双缓冲时，应记录 build 后的静态 RAM/Flash 使用，并在运行时记录 free heap 与 largest free block。总 free heap 足够不代表能成功分配大连续缓冲。
@@ -254,16 +244,7 @@ SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是�
 4. 初始化应尽量幂等，错误应返回 `esp_err_t` 并输出包含引脚/地址的诊断日志。
 5. 明确 API 的线程、阻塞、内存所有权、任务上下文和失败返回值。
 
-新增硬件验证页：
-
-1. 创建 `main/demo_<feature>.c`，实现 `enter`、`exit`、`key`。
-2. 在 `main/demo.h` 声明，在 `main/CMakeLists.txt` 加源文件，在 `main.c` 的 `DEMOS[]` 注册。
-3. `enter` 创建并加载自己的 screen；`exit` 先停任务/定时器，再删 screen 和清空指针。
-4. 页面文字保持英文；说明性注释可用中文。
-5. 慢操作放工作任务，结果通过 LVGL 锁更新界面。
-6. 保留 OK 长按返回这一全局交互，不在页面重复实现。
-
-如果菜单项依赖新外设，还需扩展 `s_ok[]` 初始化与失败禁用逻辑。注意当前数组索引与 `DEMOS[]` 顺序隐式对应，修改顺序时必须同步核对。
+新增 Vokie 应用功能时，应扩展 `main/` 中对应模块并同步记录其公开行为。除非产品需求明确变更，否则保留 BLE V1 线协议、主机生命周期、按键契约、状态和背光策略。阻塞式音频与 BLE 工作放在任务上下文中，LVGL 更新使用现有锁。
 
 ## 12. 开发环境搭建
 
@@ -389,7 +370,7 @@ idf.py build
 | 能烧录但无日志 | 确认 USB Serial/JTAG 配置和正确端口，不要默认改用 GPIO21 UART TX |
 | 构建目录来自其他 IDF | 激活 5.5.3 后 `idf.py fullclean`，再 set-target/build |
 
-环境验收标准是：`idf.py --version` 正确、`idf.py build` 无错误、设备可烧录、monitor 能看到 `FoloToy AI Passport BSP demo 启动`，并且启动后没有持续重启或 assert。
+环境验收标准是：`idf.py --version` 正确、`idf.py build` 无错误、设备可烧录、monitor 能看到 `Vokie AI Passport firmware starting`，并且启动后没有持续重启或 assert。
 
 ## 13. 构建与验证
 
@@ -411,22 +392,22 @@ idf.py flash monitor
 
 - USB Serial/JTAG 有稳定启动日志，无重启循环、assert、watchdog 和持续错误。
 - I2C 扫描看到预期的 0x18；装有 CW2017 的板还应看到 0x63。
-- 菜单可用 UP/DOWN 循环导航，OK 单击进入，OK 长按返回。
-- 某个可选外设故障只禁用对应页面，不影响其他功能。
-- 连续切换页面和反复操作后无堆持续下降、对象悬挂或任务泄漏。
+- 主机看到 `Vokie Passport`，完成连接、订阅 Control/Audio，并收到 `hello`。
+- `UP` 开始/停止采集，`DOWN` 发送回车，`OK` 按状态执行删除、取消或清空。
+- 麦克风以 16 kHz 采集到非零音频，并收到可重组的 IMA ADPCM 帧。
+- 按键操作能立即恢复活动背光，并遵守调暗/关闭超时策略。
+- 反复连接、录音、提交、取消和断开后无堆、任务、定时器或对象泄漏。
 
 ### 按修改类型追加验收
 
 | 修改类型 | 必须观察的实机结果 |
 | --- | --- |
 | 引脚/I2C | 扫描、所有共享设备、启动冲突、USB 日志 |
-| LCD 序列/旋转/颜色 | 红绿蓝白黑色块、方向、边缘裁切、负片、字节序、背光 100/50/10% |
-| ADC/按键 | 松开和三键实测 mV、单击/双击/长按、不同电量下的裕量 |
-| codec/I2S | 1 kHz 音调频率/速度、录音非零且回放速度正确、格式切换、退出页面 |
-| 电池 | 合理 SOC 和 mV、无电量计时正确降级、断续 I2C 的错误恢复表现 |
-| Wi-Fi | 扫描总数和 SSID/RSSI 可见、OK 重扫描、反复进出后仍可扫描 |
-| Bluetooth LE | 手机看到 `FoloPassport`、OK 重启广播、退出后广播消失、反复进出无重启 |
-| light/deep sleep | Low Power 页用 UP/DOWN 选择、OK 执行；light sleep 约 2 秒后原地恢复背光；deep sleep 约 5 秒后重启，页面显示 timer 唤醒和 RTC 保留计数 |
+| LCD 序列/旋转/颜色 | 红绿蓝白黑色块、方向、边缘裁切、负片、字节序、背光级别 |
+| ADC/按键 | 松开和三键实测 mV、UP/DOWN/OK 单击/长按、不同电量下的裕量 |
+| codec/I2S | 非零 16 kHz 录音、帧时序、格式设置、断开/停止行为 |
+| 电池 | 显式测试 BSP 时的合理 SOC/mV、无设备时优雅降级 |
+| Bluetooth LE | `Vokie Passport` 广播、连接、订阅、hello、Notification 和重连 |
 | DMA/内存/UI | build 内存报告、运行时最小堆/最大块、音频与刷屏并发稳定性 |
 
 ## 14. 故障症状速查

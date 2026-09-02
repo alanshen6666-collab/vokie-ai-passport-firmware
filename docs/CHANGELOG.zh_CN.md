@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- 用 Vokie AI Passport 语音固件替换硬件 Demo 菜单：实现并公开 BLE V1 外设协议、16 kHz 单声道 IMA ADPCM 传输、实体 PTT/编辑按键、主机驱动的状态界面和三级背光省电策略。
+- 增加 fork 专用项目 README、BLE 协议说明、第三方声明和独立的 Vokie 品牌素材条款，为公开分发做好准备。
+- 移除继承自上游的自动同步工作流；本独立衍生项目的下游 fork 通过显式评审合并公共仓库更新。
+
 - 按功能域整理文档并采用双入口：根目录 `AGENTS.md` 变为薄路由（只保留硬约束与任务路由），详细的 AI 开发工作流下沉到 `docs/development/ai-guide.md`，`agent-guide.md` 并入其中。为 `docs/development/` 增加二级分区（`engineering/`、`ci/`、`release/`），把 `plays/` 应用档案与 `experiences/` 移入带专属 README 的 `docs/reference/` 参考区；删除 `docs/software-design/`（空脚手架）；把 `assets/{fonts,images,music}/README` 三个叶子 README 并入 `assets/` README；把 `project-completion` 的六个子文档压平为单文件；并把每个目录统一为单一 README，消除所有 `INDEX` 文件与一处重复经验索引。所有交叉引用与文献链接已更新；未丢弃任何内容。
 
 - 将小程序 BLE 安装兼容提升为二创模板强制契约：固定保护 `cardid`/Recovery 分区，

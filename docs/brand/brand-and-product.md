@@ -8,9 +8,11 @@ This document defines public brand and product language. For engineering facts, 
 
 ## Brand and positioning
 
-- Product name: **AI Passport**; full English name: **FoloToy AI Passport**. Do not translate or invent variants of the product name.
-- Brand: **FoloToy**, whose GitHub organization is `github.com/FoloToy`.
-- Repository: `github.com/FoloToy/ai-passport`, the open development baseline for confirmed hardware facts, stable interfaces, resource limits, reference implementations, and acceptance methods.
+- Hardware product: **AI Passport**; full English name: **FoloToy AI Passport**. Do not translate or invent variants of the product name.
+- Brand and hardware upstream: **FoloToy**, whose GitHub organization is `github.com/FoloToy`.
+- Current Vokie firmware repository: `github.com/alanshen6666-collab/vokie-ai-passport-firmware`.
+- Hardware/upstream source: `github.com/FoloToy/ai-passport`, the open development baseline for confirmed hardware facts, stable interfaces, resource limits, reference implementations, and acceptance methods.
+- The Vokie firmware is an independent derivative, not an official FoloToy release or endorsement.
 - Positioning: **Open Wearable AI Agent** — a wearable, open AI agent that users can redefine through installable plays.
 - Core message: **WEAR · PLAY · CREATE**.
 
@@ -53,6 +55,6 @@ You can use these references as input when generating render images with an AI i
 
 ## Specifications, source, and license
 
-See [specifications.md](../hardware-design/specifications.md) for dimensions, weight, battery, charging, NFC, input, and wireless specifications. The source repository is licensed under the MIT License, Copyright (c) 2026 FoloToy. See [fork-guide.md](../fork-guide.md) for downstream development conventions.
+See [specifications.md](../hardware-design/specifications.md) for dimensions, weight, battery, charging, NFC, input, and wireless specifications. The Vokie firmware software is licensed under the MIT License and retains the upstream `Copyright (c) 2026 FoloToy` notice. The Vokie name and symbol are separately governed by [`LICENSES/Vokie-Brand-Asset.txt`](../../LICENSES/Vokie-Brand-Asset.txt). See [fork-guide.md](../fork-guide.md) for downstream development conventions.
 
 This page owns public names, positioning, and official entry points. It does not override pin, bus, resource, or board behavior documented by the hardware sources.

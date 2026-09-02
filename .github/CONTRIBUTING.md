@@ -4,10 +4,9 @@
 
 # Contributing
 
-Thank you for contributing to FoloToy AI Passport — code, documentation,
-firmware, and feedback. This repository is the development baseline for
-open-source wearable AI hardware designed for AI agents. It is often forked for
-second development; the fork conventions are in
+Thank you for contributing code, documentation, firmware, and feedback to the
+Vokie AI Passport firmware. This repository is an independent derivative of the
+MIT-licensed FoloToy AI Passport baseline. Fork conventions are in
 [`docs/fork-guide.md`](../docs/fork-guide.md).
 
 ## Before you start
@@ -20,8 +19,8 @@ second development; the fork conventions are in
 - Follow [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) when participating in the
   community. For ordinary usage questions, see [`SUPPORT.md`](SUPPORT.md).
 - Do not commit credentials, tokens, authorization files, or personal data.
-- The repository's `main` branch stays in sync with the upstream baseline; fork
-  users develop feature work in `feature/*` branches (see `docs/fork-guide.md`).
+- Create feature work from this repository's `main` branch; fork users keep
+  their changes on `feature/*` branches (see `docs/fork-guide.md`).
 
 ## Development and verification
 

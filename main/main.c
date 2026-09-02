@@ -31,6 +31,6 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Vokie BLE startup failed: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Ready: advertise as Vokie Passport; hold UP to talk");
+        ESP_LOGI(TAG, "Ready: advertise as Vokie Passport; click UP to talk");
     }
 }

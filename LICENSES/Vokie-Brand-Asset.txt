@@ -1,0 +1,16 @@
+Vokie Brand Asset License
+
+The Vokie name and Vokie symbol included in this repository, including the
+raster data in main/vokie_symbol_asset.h, are proprietary brand assets and are
+excluded from the repository's MIT License.
+
+Permission is granted to copy and redistribute those assets only when they are
+unmodified and remain an integral part of this Vokie AI Passport firmware or an
+unaltered source archive of this repository.
+
+No permission is granted to extract, modify, sublicense, sell, register, or use
+the assets as branding for another product or service, or to imply sponsorship,
+affiliation, or endorsement. All other rights are reserved.
+
+For any use outside these terms, obtain separate written permission from the
+Vokie rights holder.

@@ -1,56 +1,52 @@
-# FoloToy AI Passport
+# Vokie AI Passport 固件
 
 [English](README.md) | 简体中文
 
-FoloToy AI Passport 是一个开放式可穿戴 AI 硬件，本仓库是这款 AI 硬件的开发基线。它不只展示"板子能运行什么"，还把开发应用所需的**硬件事实、稳定接口、资源边界、参考实现和验收方法**放在同一仓库中。
+FoloToy AI Passport 是一个开放式可穿戴 AI 硬件。本仓库保留上游开发基线，并把 Vokie AI Passport 语音输入固件作为当前应用；仓库同时保存开发应用所需的**硬件事实、稳定接口、资源边界、参考实现和验收方法**。
 
 这个仓库的组织方式是：
 
-- `main` 是最小但完整的可运行基线，也是当前硬件能力的可执行说明；
+- `main` 包含 Vokie BLE 语音输入应用，并保留对 FoloToy 上游基线和历史的归属说明；
 - `components/bsp` 隔离板级差异，为应用提供稳定 API；
-- `demo/*` 分支展示从需求到成品的不同实现路径；
+- 历史 `demo/*` 源码和上游分支仅作为参考，不参与当前固件编译；
 - AI 开发约定见 [`AGENTS.zh_CN.md`](../AGENTS.zh_CN.md) 与 [`docs/development/ai-guide.zh_CN.md`](development/ai-guide.zh_CN.md)；完整硬件上下文和故障知识见 [`docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md`](hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md)；
 - 构建结果与真机结果分开记录，禁止把"编译通过"描述成"硬件验证通过"。
 
 ## 硬件能力契约
 
-下表描述的是当前 `main` 已提供的应用能力，而不是芯片数据手册中所有可能的能力。
+下表描述当前固件实际使用的硬件和应用能力，而不是芯片数据手册中所有可能的能力。
 
 | 能力 | 已确认实现 | 应用接口 | 必须遵守的边界 |
 | --- | --- | --- | --- |
-| 显示 | ST7789P3，240 × 320，竖屏 RGB565，SPI2 40 MHz；LEDC 背光 | `bsp_display_*`、`bsp_lvgl_*` | ESP32-C3 无 PSRAM；当前为小型单 DMA 缓冲；BSP 未暴露 LCD MISO、触摸或 TE 接口 |
-| 输入 | `UP` / `DOWN` / `OK` 三键，共用 GPIO0 的 ADC 电阻分压 | `bsp_button_init()`、`bsp_button_read_mv()` | 回调运行在 button 组件任务中，不能阻塞；不能再创建第二个 ADC1 unit |
-| 音频 | ES8311，I2S0 全双工 PCM，可播放和麦克风录音 | `bsp_audio_*` | PCM 读写为阻塞调用，应放工作任务；格式切换必须保留 BSP 内的 close/open 流程 |
-| 电池 | CW2017 的 SOC 与电压读取 | `bsp_battery_*` | 是可缺省能力；读数精度取决于电芯与 profile，不能等同于已标定结果 |
-| Wi-Fi | 按需 2.4 GHz STA 扫描 demo | `main/demo_wifi.c` | 仅扫描；不连接、不存凭证、不验证天线/射频表现 |
-| Bluetooth LE | 按需以 `FoloPassport` 名义做不可连接的 NimBLE 广播 | `main/demo_ble.c` | ESP32-C3 不支持蓝牙经典；射频范围、共存与功耗需实测 |
-| 低功耗 | 两秒浅睡眠与五秒深睡眠，均以 RTC 定时器唤醒 | `main/demo_low_power.c` | 深睡眠会重启应用；当前 demo 只提供 RTC 定时器唤醒 |
-| 共享总线 | ES8311 与 CW2017 共用 I2C0 | `bsp_i2c_*` | 所有设备复用 BSP 持有的总线；不能为扫描或新设备再创建同端口总线 |
+| 显示 | ST7789P3，240 × 320，竖屏 RGB565，SPI2 40 MHz；状态界面与 LEDC 背光控制 | `bsp_display_*`、`bsp_lvgl_*`、`ui_status_*` | ESP32-C3 无 PSRAM；当前为小型单 DMA 缓冲；BSP 未暴露 LCD MISO、触摸或 TE 接口 |
+| 输入 | `UP` / `DOWN` / `OK` 三键，共用 GPIO0 ADC 电阻分压；映射为 PTT、发送、删除、清空与取消 | `bsp_button_init()`、`bsp_button_read_mv()` | 回调运行在 button 组件任务中，不能阻塞；不能再创建第二个 ADC1 unit |
+| 音频 | ES8311 以 16 kHz、16-bit、单声道采集麦克风；每 20 ms 独立编码为 IMA ADPCM | `bsp_audio_*`、`vokie_ble_start()` | PCM 读取是阻塞调用并运行在工作任务；录音要求兼容 BLE 主机完成订阅且 ATT MTU 不小于 185 |
+| Bluetooth LE | 以 `Vokie Passport` 名义进行可连接 NimBLE 广播；提供 Control、Audio 与 Device info 特征 | `vokie_ble_*` | 仅允许一个连接；协议 V1 不提供配对、对端身份认证或应用层加密 |
+| 背光 | 活动时 65%，处理时 38%，3 秒后降至 18%，20 秒后关闭 | `ui_status_touch()`、`ui_status_set_state()` | 只控制背光，不会让 ESP32-C3 或 LCD 控制器进入深度睡眠 |
+| 保护存储 | 3 MB factory app，以及固定的 `cardid` 和永久 Recovery 区域 | `partitions.csv`、bootloader hook | 不得覆盖已写入的设备身份或 Recovery 载荷；使用文档规定的安装路径 |
 | 日志与烧录 | ESP32-C3 原生 USB Serial/JTAG | ESP-IDF console | GPIO18/19 保留给 USB；UART0 默认 TX GPIO21 与背光冲突 |
 
 所有引脚、地址、面板参数和按键电压窗口只在 [`components/bsp/include/bsp_pins.h`](../components/bsp/include/bsp_pins.h) 定义。应用代码不得复制这些常量。完整引脚表、面板初始化、ADC 阈值、I2C 地址规则、音频时钟和内存说明见 [AI 硬件开发指南](hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md)。
 
-应用也可以使用 ESP-IDF 提供的定时器、FreeRTOS 任务和内部 Flash/NVS；番茄钟分支提供了 NVS 示例。Wi-Fi 和 Bluetooth LE 仍是 ESP-IDF 应用服务而非 BSP API：其菜单页面仅在打开时初始化对应协议栈、退出时释放。`demo/claude-buddy-port` 仍是更完整的 BLE 应用架构参考，不能替代对当前板卡天线、射频表现、功耗和共存行为的实测。当前产品与固件基线使用 8 MB Flash，包含 3 MB factory-app 分区，并固定保留设备身份与永久 Recovery 区域，使二创固件仍可通过小程序安装。
+当前应用使用 ESP-IDF 定时器、FreeRTOS 任务、NVS 初始化、NimBLE 和 LVGL。Wi-Fi 与历史菜单 Demo 不参与当前固件编译。当前产品与固件基线使用 8 MB Flash，包含 3 MB factory-app 分区，并固定保留设备身份与永久 Recovery 区域，使二创固件仍可通过小程序安装。主机契约见 [BLE 协议](ai-passport-ble-protocol.zh_CN.md)。
 
 ### 不属于当前能力契约的事项
 
 公开固件能力以表中接口为限，不能仅凭 ESP32-C3 芯片能力推断其他板级接口。新增硬件接口必须提供明确的 BSP 定义和实机验收标准。
 
-## 用一句需求开始开发
+## 安全扩展固件
 
-简单需求可以直接交给 AI 助手：
+给 AI 助手的有效需求应同时说明主机行为和设备验收标准：
 
 ```text
-请为 FoloToy AI Passport 开发一个离线习惯打卡应用。
-使用三个实体按键和 240×320 屏幕，记录保存在掉电不丢失的存储中。
-从 `main` 开始，创建 `feature/*` 分支并在该分支上开发。
-遵守 AGENTS.md 和 docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md；先查找相关 demo 分支与 plays/ 应用，
-保持硬件逻辑在 components/bsp、应用逻辑在 main，完成可运行实现与测试，
-最后分别报告构建结果、未执行的真机项目和逐项验收方法。
+为 Vokie AI Passport 固件增加一个功能，但不要改变 BLE V1 线协议。
+保留受保护的 cardid 和 Recovery 分区，把硬件事实放在 components/bsp，
+把产品行为放在 main。从 `main` 创建 `feature/*` 分支，运行
+./tools/validate.sh --static 和 --firmware，并把构建结果与尚未执行的
+BLE、音频、按键真机验收分别报告。
 ```
 
-开始前先看 [`reference/`](reference/README.zh_CN.md) 有没有已存在或可参考的应用、以及已沉淀、可复用的经验，再配合相关 demo 分支。
-这些列出了已经构建好、可复用的东西。
+开始前先看 [`reference/`](reference/README.zh_CN.md) 中可复用的经验与已归档应用。当前 `main` 已经包含 Vokie 语音输入应用；不要恢复历史 demo，也不要仅凭 ESP32-C3 数据手册推断板卡未公开的接口。
 
 需求越具体，AI 助手越容易一次实现正确。建议说明：
 
@@ -62,41 +58,33 @@ FoloToy AI Passport 是一个开放式可穿戴 AI 硬件，本仓库是这款 A
 
 若需求没有给出所有细节，AI 助手可以在不改变产品方向的范围内采用保守默认值，但应在交付中列出这些假设。涉及新接线、电源安全、硬件版本或不可恢复数据格式的决定必须先确认。
 
-## 示例分支是设计案例，不是功能堆叠
+## 上游历史示例
 
-每个 `demo/*` 分支都从基线演化出一个独立应用。它们的价值是展示具体问题的实现方式；新应用通常应从 `main` 建分支，按需参考，而不是把多个 demo 整体合并。
-
-| 分支 | 展示的应用 | 值得复用的模式 |
-| --- | --- | --- |
-| `demo/stopwatch` | 秒表 | 最小计时应用、纯逻辑与 LVGL 分离、主机逻辑测试 |
-| `demo/cat-themed-pomodoro-timer` | 猫咪养成番茄钟 | 单调时钟、暂停/恢复、NVS 持久化、较完整的 PRD 与状态模型 |
-| `demo/rock-paper-scissors` | 石头剪刀布 | RGB565 图片资产、素材生成脚本、Flash 资源权衡 |
-| `demo/tetris-game` | 三键俄罗斯方块 | 实时游戏循环、低延迟 `PRESS` 输入、局部刷新、纯游戏模型、音效与麦克风交互 |
-| `demo/claude-buddy-port` | 桌面 AI 硬件伴侣 | 用完整应用替换 demo 菜单、加密 BLE、协议解析、状态归约、任务通信和较完整的主机测试 |
-
-查看示例而不切换当前工作区：
+FoloToy 原始仓库保留了一些历史 `demo/*` 分支，可作为设计参考。它们不是本独立 Vokie 仓库的分支，也不属于当前固件能力契约。只有在明确配置上游 remote 后，才应查看这些示例：
 
 ```bash
-git branch -r --list 'origin/demo/*'
-git diff main...origin/demo/tetris-game -- main components tests
-git show origin/demo/tetris-game:main/demo_tetris.c
+git remote add folotoy https://github.com/FoloToy/ai-passport.git
+git fetch --no-tags folotoy 'refs/heads/demo/*:refs/remotes/folotoy/demo/*'
+git branch -r --list 'folotoy/demo/*'
+git diff main...folotoy/demo/tetris-game -- main components tests
+git show folotoy/demo/tetris-game:main/demo_tetris.c
 ```
 
-开始新应用。本仓库在同一个基线上承载多个独立项目：从 `main` 开始后，应创建 `feature/*` 分支并在该分支上开发，**不要**直接在 `main` 上开发。每个项目的最终分支都是 `feature/*`（如 `feature/my-passport-app`），让 `main` 保持干净的上游基线，各项目互不纠缠。
+示例可能以不兼容的方式修改同一菜单、配置或驱动。它们只是历史参考，不会自动兼容当前 Vokie 应用或 BSP 能力契约。
+
+新功能应从本仓库当前公开的 `main` 创建短生命周期的 `feature/*` 或 `fix/*` 分支，不要直接在 `main` 上开发。
 
 ```bash
 git switch main
 git switch -c feature/my-passport-app
 ```
 
-示例分支之间可能改变了同一菜单、配置或驱动。应先理解差异，再提取状态模型、资源流水线或并发模式；不能因为代码曾出现在示例分支，就把它当成当前 `main` 的 BSP 保证。
-
 ## 项目结构
 
 ```text
 components/bsp/include/  BSP 公开 API 与 bsp_pins.h 硬件事实
 components/bsp/src/      显示、按键、音频、电池、共享 I2C 实现
-main/                    最小菜单、LVGL UI 与独立硬件演示页
+main/                    Vokie BLE 外设、音频传输与状态界面
 tests/                   可脱离硬件运行的轻量逻辑测试源
 tools/                   本地与 CI 共用的验证及固件校验脚本
 docs/                    项目说明、变更记录、工程/协作规范与设计参考
@@ -113,6 +101,8 @@ LICENSE                  仓库许可证
 
 本仓库文档按功能域组织。`authoritative` 指对开发与协作有约束力的文档；`参考` 指提供背景或索引的文档。
 
+- [`docs/ai-passport-ble-protocol.zh_CN.md`](ai-passport-ble-protocol.zh_CN.md) — 公开的 BLE V1 服务、消息、音频分片、生命周期与安全边界。
+- [`docs/THIRD_PARTY_NOTICES.zh_CN.md`](THIRD_PARTY_NOTICES.zh_CN.md) — 依赖版本、许可证与再分发说明。
 - [`docs/development/`](development/README.zh_CN.md) — 工程规则与可复用工作流：`ai-guide.md`、`engineering/`、`ci/`、`release/` 区。其 README 列明它们。
 - [`docs/contribution/`](contribution/README.zh_CN.md) — 协作、文档与提交/PR 约定。
 - [`docs/hardware-design/`](hardware-design/README.zh_CN.md) — 板卡事实、约束、验收矩阵与排障。

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -27,6 +28,7 @@ ROOT_MARKDOWN_ALLOWLIST = {
     "README.md",
     "README.zh_CN.md",
 }
+AI_PASSPORT_PLUGIN_ID = "0b7a1e8d-12f1-4a4d-ae4d-5a1f6d0b8e21"
 
 
 def git_files() -> list[Path]:
@@ -193,6 +195,74 @@ def check_conflict_markers(files: list[Path], errors: list[str]) -> None:
             errors.append(f"{path.relative_to(ROOT)}: unresolved merge conflict marker")
 
 
+def check_vokie_plugin(errors: list[str]) -> None:
+    """Validate the firmware-matched standalone Vokie Plugin package."""
+    plugin_root = ROOT / "vokie-plugin"
+    manifest_path = plugin_root / "vokie.plugin.json"
+    required = (
+        manifest_path,
+        plugin_root / "worker/index.mjs",
+        plugin_root / "worker/protocol.mjs",
+        plugin_root / "worker/adpcm.mjs",
+        plugin_root / "ui/index.html",
+        plugin_root / "ui/vokie-plugin-sdk.js",
+        plugin_root / "assets/icon.svg",
+        plugin_root / "assets/bin/ai-passport-helper",
+        plugin_root / "helper/AiPassportHelper.swift",
+        plugin_root / "helper/Info.plist",
+        plugin_root / "scripts/build-helper.mjs",
+    )
+    for path in required:
+        if not path.is_file():
+            errors.append(f"missing Vokie Plugin file: {path.relative_to(ROOT)}")
+    if any(not path.is_file() for path in required):
+        return
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        errors.append(f"vokie-plugin/vokie.plugin.json: invalid JSON: {exc}")
+        return
+    expected = {
+        "id": AI_PASSPORT_PLUGIN_ID,
+        "apiVersion": "1",
+        "platforms": ["darwin"],
+        "architectures": ["arm64"],
+        "transports": ["ble"],
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            errors.append(
+                f"vokie-plugin/vokie.plugin.json: {key} must be {value!r}"
+            )
+
+    entrypoints = (
+        manifest.get("worker", {}).get("entrypoint"),
+        manifest.get("ui", {}).get("entrypoint"),
+        manifest.get("icon"),
+    )
+    for entrypoint in entrypoints:
+        if not isinstance(entrypoint, str):
+            errors.append("vokie-plugin/vokie.plugin.json: invalid entrypoint")
+            continue
+        resolved = (plugin_root / entrypoint).resolve()
+        if plugin_root.resolve() not in resolved.parents or not resolved.is_file():
+            errors.append(
+                f"vokie-plugin/vokie.plugin.json: missing or unsafe entrypoint {entrypoint}"
+            )
+
+    helper = plugin_root / "assets/bin/ai-passport-helper"
+    if helper.stat().st_mode & 0o111 == 0:
+        errors.append("vokie-plugin/assets/bin/ai-passport-helper: must be executable")
+
+    worker = (plugin_root / "worker/index.mjs").read_text(encoding="utf-8")
+    if "process.env.VOKIE_PLUGIN_ID" not in worker or AI_PASSPORT_PLUGIN_ID not in worker:
+        errors.append("vokie-plugin/worker/index.mjs: Plugin identity fallback is missing")
+    version = manifest.get("version")
+    if not isinstance(version, str) or f"version: '{version}'" not in worker:
+        errors.append("vokie-plugin: manifest and Worker versions must match")
+
+
 def main() -> int:
     errors: list[str] = []
     files = text_files()
@@ -203,6 +273,7 @@ def main() -> int:
     check_issue_forms(errors)
     check_sensitive_content(files, errors)
     check_conflict_markers(files, errors)
+    check_vokie_plugin(errors)
 
     if errors:
         for error in errors:

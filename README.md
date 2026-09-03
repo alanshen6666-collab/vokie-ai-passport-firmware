@@ -34,6 +34,8 @@ text insertion.
   20 seconds; processing uses 38%.
 - Preserves the upstream protected device-identity and permanent-Recovery
   partition layout.
+- Ships the matching standalone Vokie Plugin source for customization and
+  compatibility with Plugin-based Vokie installations.
 
 ## Requirements
 
@@ -50,14 +52,19 @@ Vokie is a required runtime dependency for the supported voice-input workflow.
 Before using the device:
 
 1. Download and install Vokie from **[Vokie.com](https://vokie.com/download.html)**.
-2. Use a Vokie build that includes the **AI Passport Plugin**. The current
-   first-party plugin supports macOS on Apple Silicon (`darwin/arm64`).
-3. Start Vokie and enable the AI Passport Plugin before connecting the device.
+2. On current Apple Silicon Vokie builds, open the external-device control
+   center and connect AI Passport through the built-in integration.
+3. For a compatible older Vokie build or custom integration, import the
+   repository's [`vokie-plugin/`](vokie-plugin/) directory in Settings ->
+   Plugins, then enable and configure it.
 
-The plugin connects over CoreBluetooth, reassembles and decodes audio, opens
-Vokie recording sessions, forwards status, and maps device buttons to editor
-commands. Although the firmware has no compile-time dependency on Vokie, the
-device alone does not provide speech recognition, AI refinement, or text
+Both integrations connect over CoreBluetooth, reassemble and decode audio,
+open Vokie recording sessions, forward status, and map device buttons to editor
+commands. The standalone Plugin is included as modifiable source for custom
+behavior. Before using it with a device already selected by the built-in
+integration, forget that built-in connection to avoid competing for the same
+BLE peripheral. Although the firmware has no compile-time dependency on Vokie,
+the device alone does not provide speech recognition, AI refinement, or text
 insertion.
 
 The public [AI Passport BLE V1 protocol](docs/ai-passport-ble-protocol.md) is
@@ -128,6 +135,7 @@ a peer.
 
 ```text
 main/                    Vokie BLE peripheral, audio transport, and status UI
+vokie-plugin/            Importable and modifiable Vokie desktop Plugin
 components/bsp/          FoloToy AI Passport board-support package
 docs/                    Protocol, build, hardware, and contribution documents
 tests/                   Host-runnable validation tests

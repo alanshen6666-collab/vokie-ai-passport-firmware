@@ -95,6 +95,7 @@ git switch -c feature/my-passport-app
 components/bsp/include/  Public BSP APIs and bsp_pins.h hardware facts
 components/bsp/src/      Display, button, audio, battery, and shared-I2C implementations
 main/                    Vokie BLE peripheral, audio transport, and status UI
+vokie-plugin/            Importable and modifiable Vokie desktop Plugin
 tests/                   Lightweight logic tests that can run without hardware
 tools/                   Shared local/CI validation and firmware verification scripts
 docs/                    Project docs, changelog, engineering/contribution rules, and design references

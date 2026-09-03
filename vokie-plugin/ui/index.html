@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Passport</title>
+    <style>
+      :root {
+        color: #17202a;
+        font:
+          13px -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f7fafc;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      main {
+        width: min(100%, 680px);
+        margin: 0 auto;
+        padding: 16px 20px 20px;
+      }
+      .title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0;
+      }
+      p {
+        margin: 0 0 14px;
+        color: #64748b;
+        line-height: 1.5;
+      }
+      section {
+        border: 1px solid #dbe7ee;
+        background: #fff;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .overview .row,
+      .device-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #e4edf2;
+      }
+      .overview .row:last-child,
+      .device-row:last-child {
+        border-bottom: 0;
+      }
+      .label {
+        flex: 0 0 auto;
+        color: #737373;
+      }
+      .value {
+        min-width: 0;
+        font-weight: 600;
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+      .device-selection {
+        margin-top: 12px;
+      }
+      .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #e4edf2;
+      }
+      .connection-state {
+        display: inline-flex;
+        min-height: 24px;
+        align-items: center;
+        border: 1px solid #b8d9d8;
+        border-radius: 999px;
+        padding: 2px 9px;
+        background: #effaf8;
+        color: #147d79;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .device-value {
+        min-width: 0;
+        text-align: right;
+      }
+      .device-value strong {
+        display: block;
+        overflow-wrap: anywhere;
+      }
+      .device-value code {
+        display: block;
+        margin-top: 3px;
+        color: #737373;
+        font:
+          11px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      .controls {
+        padding: 10px 14px;
+      }
+      .discovered-list {
+        display: grid;
+        gap: 8px;
+        padding: 10px 14px 0;
+      }
+      .discovered-heading {
+        padding: 10px 14px 0;
+        color: #525252;
+        font-weight: 600;
+      }
+      .discovered-device {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid #dbe7ee;
+        background: #fbfdff;
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      .discovered-device code {
+        display: block;
+        margin-top: 3px;
+        color: #737373;
+        font:
+          11px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        min-height: 36px;
+        border: 1px solid #147d79;
+        border-radius: 6px;
+        background: #147d79;
+        padding: 7px 12px;
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary {
+        border-color: #f0b8a7;
+        background: #fff7f4;
+        color: #b4533d;
+      }
+      button:hover:not(:disabled) {
+        filter: brightness(0.94);
+      }
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      .hint {
+        margin-top: 10px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        background: #fff4e8;
+        color: #8a5a2b;
+        line-height: 1.5;
+      }
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        color: #525252;
+      }
+      .github-link:hover {
+        color: #171717;
+      }
+      .github-link svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+      }
+      .feedback {
+        min-height: 20px;
+        margin-top: 10px;
+        color: #525252;
+        line-height: 20px;
+      }
+      .feedback[data-kind='error'] {
+        color: #b91c1c;
+      }
+      .feedback[data-kind='success'] {
+        color: #147d79;
+      }
+      @media (max-width: 520px) {
+        main {
+          padding: 18px 16px;
+        }
+        .actions {
+          flex-direction: column;
+        }
+        .actions button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="title-row">
+        <h1>AI Passport</h1>
+        <a
+          class="github-link"
+          href="https://github.com/alanshen6666-collab/vokie-ai-passport-firmware"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="在 GitHub 查看 AI Passport 固件"
+          title="在 GitHub 查看 AI Passport 固件"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.08 1.83 1.23 1.83 1.23 1.07 1.82 2.8 1.3 3.48.99.11-.77.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.12-.3-.53-1.52.12-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.3-1.55 3.3-1.23 3.3-1.23.65 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.6-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5"
+            />
+          </svg>
+        </a>
+      </div>
+      <p>无线语音输入设备</p>
+      <section class="overview">
+        <div class="row">
+          <span class="label">连接方式</span>
+          <span class="value">Bluetooth Low Energy</span>
+        </div>
+        <div class="row">
+          <span class="label">语音输入键</span>
+          <span class="value">右侧最上方按键</span>
+        </div>
+        <div class="row">
+          <span class="label">操作方式</span>
+          <span class="value">按一下开始，再按一下结束</span>
+        </div>
+        <div class="row">
+          <span class="label">音频格式</span>
+          <span class="value">16 kHz · 单声道</span>
+        </div>
+      </section>
+
+      <section class="device-selection" aria-labelledby="device-selection-title">
+        <div class="section-heading">
+          <h2 id="device-selection-title">设备选择</h2>
+          <span class="connection-state" id="connection-state">正在读取</span>
+        </div>
+        <div class="device-row">
+          <span class="label">当前连接</span>
+          <span class="device-value">
+            <strong id="current-device">读取中</strong>
+            <code id="current-device-id"></code>
+          </span>
+        </div>
+        <div class="discovered-heading" id="discovered-heading" hidden>附近设备</div>
+        <div id="discovered-devices" class="discovered-list" hidden></div>
+        <div class="controls">
+          <div class="feedback" id="feedback" role="status" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <div class="hint">
+        请先刷入支持
+        <a
+          href="https://github.com/alanshen6666-collab/vokie-ai-passport-firmware"
+          target="_blank"
+          rel="noreferrer"
+          >Vokie BLE Voice Protocol v1</a
+        >
+        的固件，并保持 AI Passport 开机。设备状态由 Plugin 自动管理。
+      </div>
+    </main>
+    <script src="vokie-plugin-sdk.js"></script>
+    <script>
+      const uuidPattern =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const connectedStatuses = new Set(['connected', 'recording']);
+      const statusLabels = {
+        starting: '启动中',
+        ready: '等待设备',
+        connected: '已连接',
+        recording: '录音中',
+        stopped: '未连接',
+        error: '异常'
+      };
+      const elements = {
+        connectionState: document.querySelector('#connection-state'),
+        currentDevice: document.querySelector('#current-device'),
+        currentDeviceId: document.querySelector('#current-device-id'),
+        discoveredDevices: document.querySelector('#discovered-devices'),
+        discoveredHeading: document.querySelector('#discovered-heading'),
+        feedback: document.querySelector('#feedback')
+      };
+      let pluginState = {};
+      let persistedConfig = {};
+      let busy = false;
+      let snapshotPending = false;
+      let discoveredDevices = [];
+
+      function normalizeUuid(value) {
+        if (typeof value !== 'string') return null;
+        const trimmed = value.trim();
+        return uuidPattern.test(trimmed) ? trimmed.toUpperCase() : null;
+      }
+
+      function currentConnectedUuid() {
+        if (!connectedStatuses.has(pluginState.status)) return null;
+        return normalizeUuid(pluginState.deviceId);
+      }
+
+      function configuredDeviceValue() {
+        return typeof persistedConfig.preferredDeviceId === 'string'
+          ? persistedConfig.preferredDeviceId.trim()
+          : null;
+      }
+
+      function setFeedback(message, kind) {
+        elements.feedback.textContent = message;
+        elements.feedback.dataset.kind = kind || '';
+      }
+
+      function render() {
+        const currentId = currentConnectedUuid();
+        elements.connectionState.textContent =
+          statusLabels[pluginState.status] || '状态未知';
+        elements.currentDevice.textContent = currentId
+          ? pluginState.deviceName || 'AI Passport'
+          : '无已连接设备';
+        elements.currentDeviceId.textContent = currentId || '';
+        elements.discoveredDevices.replaceChildren();
+        for (const device of discoveredDevices) {
+          const row = document.createElement('div');
+          row.className = 'discovered-device';
+          const info = document.createElement('div');
+          const name = document.createElement('strong');
+          name.textContent = device.deviceName || 'AI Passport';
+          const id = document.createElement('code');
+          id.textContent = device.deviceId;
+          info.append(name, id);
+          const button = document.createElement('button');
+          button.type = 'button';
+          const isConnected = normalizeUuid(device.deviceId) === currentId;
+          button.textContent = isConnected ? '忘记设备' : '连接';
+          button.disabled = busy;
+          button.addEventListener('click', () => {
+            void setPreferredDevice(
+              isConnected ? null : device.deviceId,
+              isConnected ? '已忘记此设备。' : '已连接并记住此设备。'
+            );
+          });
+          row.append(info, button);
+          elements.discoveredDevices.append(row);
+        }
+        elements.discoveredDevices.hidden = discoveredDevices.length === 0;
+        elements.discoveredHeading.hidden = discoveredDevices.length === 0;
+      }
+
+      async function refreshSnapshot(initial) {
+        if (snapshotPending || busy) return;
+        snapshotPending = true;
+        try {
+          const result = await vokiePlugin.getState();
+          pluginState =
+            result.state && typeof result.state === 'object' ? result.state : {};
+          persistedConfig =
+            result.config &&
+            typeof result.config === 'object' &&
+            !Array.isArray(result.config)
+              ? result.config
+              : {};
+          discoveredDevices = Array.isArray(pluginState.discoveredDevices)
+            ? pluginState.discoveredDevices.filter(
+                (device) => device && typeof device.deviceId === 'string'
+              )
+            : [];
+          render();
+        } catch (error) {
+          if (initial) {
+            setFeedback(
+              error instanceof Error ? error.message : String(error),
+              'error'
+            );
+          }
+        } finally {
+          snapshotPending = false;
+        }
+      }
+
+      async function setPreferredDevice(deviceId, successMessage) {
+        if (busy) return;
+        busy = true;
+        render();
+        setFeedback('正在保存…');
+        const nextConfig = { ...persistedConfig, preferredDeviceId: deviceId };
+        delete nextConfig.clearPreferredDevice;
+        try {
+          await vokiePlugin.configure(nextConfig);
+          persistedConfig = nextConfig;
+          setFeedback(successMessage, 'success');
+        } catch (error) {
+          setFeedback(
+            error instanceof Error ? error.message : String(error),
+            'error'
+          );
+        } finally {
+          busy = false;
+          render();
+        }
+      }
+
+      void refreshSnapshot(true);
+      const refreshTimer = window.setInterval(
+        () => void refreshSnapshot(false),
+        2500
+      );
+      window.addEventListener('pagehide', () => window.clearInterval(refreshTimer), {
+        once: true
+      });
+    </script>
+  </body>
+</html>

@@ -6,6 +6,9 @@
 
 ## Unreleased
 
+- Added the standalone AI Passport Vokie Plugin alongside the firmware for
+  import into compatible Vokie builds and custom desktop-integration development;
+  documented the current built-in Vokie connection as the default path.
 - Replaced the hardware-demo menu with the Vokie AI Passport voice firmware: a documented BLE V1 peripheral, 16 kHz mono IMA ADPCM transport, physical PTT/edit controls, host-driven status UI, and three-stage backlight power saving.
 - Added a fork-specific project README, BLE protocol reference, third-party notices, and separate Vokie brand-asset terms for public distribution.
 - Removed the inherited upstream-sync workflow from this standalone derivative; downstream forks update from the public repository through an explicit reviewed merge.

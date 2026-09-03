@@ -6,6 +6,7 @@
 
 ## Unreleased
 
+- 在固件旁新增独立的 AI Passport Vokie Plugin，支持导入兼容的 Vokie 版本并开发自定义桌面端集成；同时明确当前 Vokie 的内置连接为默认使用路径。
 - 用 Vokie AI Passport 语音固件替换硬件 Demo 菜单：实现并公开 BLE V1 外设协议、16 kHz 单声道 IMA ADPCM 传输、实体 PTT/编辑按键、主机驱动的状态界面和三级背光省电策略。
 - 增加 fork 专用项目 README、BLE 协议说明、第三方声明和独立的 Vokie 品牌素材条款，为公开分发做好准备。
 - 移除继承自上游的自动同步工作流；本独立衍生项目的下游 fork 通过显式评审合并公共仓库更新。

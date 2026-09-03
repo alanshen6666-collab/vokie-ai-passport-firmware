@@ -21,6 +21,7 @@
 - 三个实体按键支持发送、删除、清空和取消操作。
 - 三级背光策略：活动时 65%，3 秒后降至 18%，20 秒后关闭；处理状态使用 38%。
 - 保留上游的设备身份保护分区和永久 Recovery 分区布局。
+- 随固件提供匹配的独立 Vokie Plugin 源码，支持自定义开发和基于 Plugin 的旧版 Vokie。
 
 ## 依赖
 
@@ -35,10 +36,10 @@
 Vokie 是当前受支持语音输入链路的强运行时依赖。使用设备前必须：
 
 1. 前往 **[Vokie.com](https://vokie.com/download.html)** 下载并安装 Vokie。
-2. 使用包含 **AI Passport 插件**的 Vokie 版本。当前第一方插件支持 Apple Silicon Mac（`darwin/arm64`）。
-3. 启动 Vokie 并启用 AI Passport 插件，再连接设备。
+2. 在当前 Apple Silicon Vokie 版本中，打开外部设备控制中心，通过内置连接使用 AI Passport。
+3. 使用兼容的旧版 Vokie 或开发自定义集成时，在设置 -> Plugin 中导入仓库的 [`vokie-plugin/`](vokie-plugin/) 目录，再启用并配置它。
 
-插件负责通过 CoreBluetooth 连接设备、重组和解码音频、创建 Vokie 录音会话、回传状态，并把设备按键映射为编辑命令。虽然固件编译不依赖 Vokie，但设备自身不提供语音识别、AI 润色和文字输入能力。
+两种集成都通过 CoreBluetooth 连接设备、重组和解码音频、创建 Vokie 录音会话、回传状态，并把设备按键映射为编辑命令。独立 Plugin 以可修改源码形式提供，便于实现自定义行为。使用它连接已被内置集成选中的设备前，请先忘记内置连接，避免两个客户端争用同一个 BLE 外设。虽然固件编译不依赖 Vokie，但设备自身不提供语音识别、AI 润色和文字输入能力。
 
 公开的 [AI Passport BLE V1 协议](docs/ai-passport-ble-protocol.zh_CN.md)用于集成与开发；第三方宿主不是当前面向普通用户支持的使用路径。
 
@@ -93,6 +94,7 @@ idf.py flash monitor
 
 ```text
 main/                    Vokie BLE 外设、音频传输与状态界面
+vokie-plugin/            可导入、可修改的 Vokie 桌面 Plugin
 components/bsp/          FoloToy AI Passport 板级支持包
 docs/                    协议、构建、硬件与协作文档
 tests/                   可脱离硬件运行的验证测试

@@ -6,8 +6,14 @@ export const manifest: {
   platforms: ['darwin'];
   architectures: ['arm64'];
   transports: ['ble'];
-  capabilities: { ptt: true; streamOnly: true };
-  permissions: ['bluetooth', 'native-helper'];
+  capabilities: {
+    ptt: true;
+    streamOnly: true;
+    sendEnter: true;
+    deleteChar: true;
+    clearInput: true;
+  };
+  permissions: ['bluetooth', 'native-helper', 'accessibility'];
   icon: string;
   ui: { entrypoint: string };
 };

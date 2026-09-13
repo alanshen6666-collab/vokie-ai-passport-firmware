@@ -1,11 +1,14 @@
 #include "ui_status.h"
 
+#include "bsp_battery.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "ui_battery.h"
 #include "vokie_symbol_asset.h"
 #include <stdio.h>
 #include <string.h>
@@ -37,12 +40,14 @@
 #define UI_HINT_FADE_OUT_MS 220
 #define UI_DIM_TIMEOUT_US (3LL * 1000LL * 1000LL)
 #define UI_OFF_TIMEOUT_US (20LL * 1000LL * 1000LL)
+#define UI_BATTERY_POLL_US (30LL * 1000LL * 1000LL)
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_state;
 static lv_obj_t *s_detail;
 static lv_obj_t *s_dot;
 static lv_obj_t *s_button_hints;
+static lv_obj_t *s_battery;
 static volatile int64_t s_last_touch_us;
 static volatile bool s_active;
 static volatile bool s_dirty;
@@ -197,12 +202,39 @@ static void render_state(void)
 static void status_task(void *arg)
 {
     (void)arg;
+    int64_t next_battery_us = 0;
+    int battery_soc = -1;
+    int battery_mv = -1;
+    bool battery_dirty = true;
     for (;;) {
         if (s_dirty) {
             s_dirty = false;
             render_state();
         }
         const int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_battery_us) {
+            // I2C may block for 100 ms. Keep it in this worker, outside the
+            // LVGL lock and button callbacks, and retry failed reads next time.
+            battery_soc = bsp_battery_soc();
+            battery_mv = bsp_battery_mv();
+            battery_dirty = true;
+            next_battery_us = esp_timer_get_time() + UI_BATTERY_POLL_US;
+        }
+        if (battery_dirty && bsp_lvgl_lock(100)) {
+            static const char *const icons[] = {
+                LV_SYMBOL_BATTERY_EMPTY, LV_SYMBOL_BATTERY_1,
+                LV_SYMBOL_BATTERY_2, LV_SYMBOL_BATTERY_3, LV_SYMBOL_BATTERY_FULL,
+            };
+            const ui_battery_view_t view = ui_battery_view(battery_soc, battery_mv);
+            lv_label_set_text_fmt(s_battery, "%s %s", icons[view.bars], view.text);
+            lv_obj_set_style_text_color(s_battery,
+                lv_color_hex(view.low ? UI_RED : UI_MUTED), 0);
+            battery_dirty = false;
+            // Battery refreshes must not wake the screen or reset idle timers.
+            bsp_lvgl_unlock();
+            ESP_LOGI("ui_status", "Battery display: %s (soc=%d, voltage=%dmV)",
+                     view.text, battery_soc, battery_mv);
+        }
         if (s_screen && !s_active && s_hints_requested &&
             now_us >= s_hints_deadline_us && bsp_lvgl_lock(100)) {
             s_hints_requested = false;
@@ -242,6 +274,13 @@ void ui_status_init(void)
     draw_vokie();
     draw_button_rail();
 
+    // A single small footer label keeps the centered composition and the
+    // transient button rail clear, including the widest value (100%).
+    s_battery = label(s_screen, LV_SYMBOL_BATTERY_EMPTY " --%",
+                      &lv_font_montserrat_14, UI_MUTED, 80);
+    lv_obj_set_style_text_align(s_battery, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_battery, BSP_LCD_W - 92, BSP_LCD_H - 28);
+
     s_state = label(s_screen, "", &lv_font_montserrat_20, UI_BLUE, UI_CONTENT_W);
     lv_obj_set_pos(s_state, UI_CONTENT_X, UI_STATE_Y);
     s_detail = lv_label_create(s_screen);
@@ -255,7 +294,10 @@ void ui_status_init(void)
     lv_screen_load(s_screen);
     bsp_lvgl_unlock();
     render_state();
-    xTaskCreate(status_task, "ui_status", 2048, NULL, 2, &s_task);
+    // Battery I2C and diagnostic/error logging need additional stack headroom.
+    if (xTaskCreate(status_task, "ui_status", 3072, NULL, 2, &s_task) != pdPASS) {
+        ESP_LOGE("ui_status", "Failed to start status worker");
+    }
 }
 
 void ui_status_touch(void)

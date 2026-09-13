@@ -6,6 +6,9 @@
 
 ## Unreleased
 
+- Added a bottom-right battery icon and SOC percentage, refreshed every 30 seconds. Readings at or below 20% appear red; invalid SOC falls back to measured voltage, and unavailable readings show `--%`. Refreshes preserve the backlight timeout.
+- Initialized the CW2017 with the official stock 520 mAh profile from FoloToy PR #38 to restore valid SOC on unconfigured gauges, with readback verification, bounded readiness checks, and no redundant profile writes.
+
 - Added the standalone AI Passport Vokie Plugin alongside the firmware for
   import into compatible Vokie builds and custom desktop-integration development;
   documented the current built-in Vokie connection as the default path.

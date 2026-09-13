@@ -1,3 +1,4 @@
+#include "bsp_battery.h"
 #include "bsp_display.h"
 #include "bsp_i2c.h"
 #include "esp_log.h"
@@ -20,6 +21,11 @@ void app_main(void)
 
     if (bsp_i2c_init() != ESP_OK) {
         ESP_LOGW(TAG, "I2C initialization failed; audio may be unavailable");
+    }
+    // Initialize before UI/audio workers start using the shared bus. A missing
+    // gauge is optional hardware; the status UI will display an unknown SOC.
+    if (bsp_battery_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Battery unavailable; displaying --%%");
     }
     if (bsp_display_init() == ESP_OK && bsp_lvgl_init()) {
         bsp_display_backlight(65);

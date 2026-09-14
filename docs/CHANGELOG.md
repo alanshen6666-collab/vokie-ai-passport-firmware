@@ -6,7 +6,9 @@
 
 ## Unreleased
 
-- Added a bottom-right battery icon and SOC percentage, refreshed every 30 seconds. Readings at or below 20% appear red; invalid SOC falls back to measured voltage, and unavailable readings show `--%`. Refreshes preserve the backlight timeout.
+- Placed VOICE/SEND/UNDO close to the right edge with subtle leader lines to their keys. Each right-side key reveals only its matching label and line. Single hints share the middle SEND position, with a compact one-row background and a line from that position to the corresponding physical key; a new key replaces the previous selection. Startup retains the original three label positions and guide paths, shows all three for three seconds, then fades them out. The hardware power button has no application press event.
+- Placed the voice state and supporting text above the logo, with the top of READY aligned to the upper key guide. Moved Vokie Power below the logo, with the title's bottom aligned to the lower key guide. The logo's visual center aligns with the SEND row, and all main content remains horizontally centered.
+- Added a subdued gray (`#646C78`) battery icon and SOC percentage in the top-right corner, refreshed every 30 seconds and always visible while the screen is lit. Hints selected by a physical key remain visible during recording/processing and fade out after the three-second idle hint timeout. Startup guidance expires after three seconds even if the host becomes active. Status changes and battery refreshes do not reveal the hints. Battery refreshes preserve screen dimming and sleep. The title uses 22 px Barlow Condensed Bold, and the redundant status dot is removed. Readings at or below 20% appear red; invalid SOC falls back to measured voltage, and unavailable readings show `--%`.
 - Initialized the CW2017 with the official stock 520 mAh profile from FoloToy PR #38 to restore valid SOC on unconfigured gauges, with readback verification, bounded readiness checks, and no redundant profile writes.
 
 - Added the standalone AI Passport Vokie Plugin alongside the firmware for

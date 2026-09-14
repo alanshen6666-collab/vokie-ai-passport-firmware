@@ -32,3 +32,21 @@
 - 与当前 BSP 音频路径匹配时优先采用 16 kHz、16 位单声道 PCM。
 - 嵌入音频前评估 Flash 与内部 RAM 成本；长录音应流式或分块。
 - 无再分发许可不提交媒体文件。
+
+## Vokie 标题字体
+
+- 来源：[Barlow Condensed Bold](https://github.com/google/fonts/blob/60824dce48f7dd28fe7d65559f2da1f6e04e585b/ofl/barlowcondensed/BarlowCondensed-Bold.ttf)，固定到 Google Fonts 提交 `60824dce48f7dd28fe7d65559f2da1f6e04e585b`。
+- 作者与许可：Copyright 2017 The Barlow Project Authors；SIL Open Font License 1.1，完整许可保留在 [Barlow-OFL.txt](../LICENSES/Barlow-OFL.txt)。
+- 文件：[源 TTF](fonts/BarlowCondensed-Bold.ttf)、[生成的 LVGL 字体](fonts/vokie_title_barlow_condensed_bold_22.c) 与[声明](fonts/vokie_title_font.h)。
+- 仅包含 `Vokie Power` 所用字符：空格、`P`、`V`、`e`、`i`、`k`、`o`、`r`、`w`。标题若需要其他字符，须重新生成子集。
+- 集成：`main/CMakeLists.txt` 编译生成的 C 文件。TTF 仅用作源素材，不嵌入固件；字形采用 4 位抗锯齿、未压缩常量表，不引入运行时 TTF 解析器或字形解压缓冲区。
+
+在仓库根目录使用 `lv_font_conv` 1.5.3 重新生成：
+
+```bash
+lv_font_conv --size 22 --bpp 4 --format lvgl \
+  --font assets/fonts/BarlowCondensed-Bold.ttf --symbols 'Vokie Power' \
+  --no-compress --no-prefilter --lv-include lvgl.h \
+  --lv-font-name vokie_title_barlow_condensed_bold_22 \
+  -o assets/fonts/vokie_title_barlow_condensed_bold_22.c
+```

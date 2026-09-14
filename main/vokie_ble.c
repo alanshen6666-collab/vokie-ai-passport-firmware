@@ -196,7 +196,12 @@ static void audio_task(void *arg)
 static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
 {
     (void)user;
-    ui_status_touch();
+    switch (button) {
+    case BSP_BTN_UP: ui_status_touch(UI_STATUS_HINT_VOICE); break;
+    case BSP_BTN_DOWN: ui_status_touch(UI_STATUS_HINT_SEND); break;
+    case BSP_BTN_OK: ui_status_touch(UI_STATUS_HINT_UNDO); break;
+    default: break;
+    }
     if (button == BSP_BTN_UP) {
         if (s_conn == NO_CONN || !s_host_ready || event != BSP_BTN_CLICK) return;
         // Click-to-toggle keeps the release event from stopping a new session.

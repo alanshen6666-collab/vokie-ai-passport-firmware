@@ -33,6 +33,10 @@ void app_main(void)
     } else {
         ESP_LOGW(TAG, "Display initialization failed; continuing headless");
     }
+    // BLE starts advertising before a host connects. Keep the UI explicit
+    // about that waiting state; READY is reserved for a completed host
+    // handshake.
+    ui_status_set_state(UI_STATUS_DISCONNECTED, "Waiting for Vokie");
     err = vokie_ble_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Vokie BLE startup failed: %s", esp_err_to_name(err));

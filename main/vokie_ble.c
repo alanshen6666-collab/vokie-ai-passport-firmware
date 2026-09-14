@@ -58,6 +58,11 @@ static TickType_t s_ok_press_tick;
 static bool s_ok_long_sent;
 #define BUTTON_LONG_PRESS_MS 500
 
+static bool host_is_ready(void)
+{
+    return s_conn != NO_CONN && s_host_ready;
+}
+
 static int notify_control(const char *json);
 
 static const char *button_name(bsp_btn_t button)
@@ -225,11 +230,13 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
         return;
     }
     if (button == BSP_BTN_DOWN && event == BSP_BTN_CLICK) {
+        if (!host_is_ready()) return;
         send_button_event(button, "click", 0);
         ui_status_set_state(UI_STATUS_READY, "Send message");
         return;
     }
     if (button == BSP_BTN_OK) {
+        if (!host_is_ready()) return;
         if (event == BSP_BTN_PRESS) {
             s_ok_press_tick = xTaskGetTickCount();
             s_ok_long_sent = false;

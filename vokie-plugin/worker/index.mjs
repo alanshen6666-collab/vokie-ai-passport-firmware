@@ -28,7 +28,7 @@ export const manifest = {
     process.env.VOKIE_PLUGIN_ID ||
     '0b7a1e8d-12f1-4a4d-ae4d-5a1f6d0b8e21',
   name: 'AI Passport',
-  version: '1.0.4',
+  version: '1.0.5',
   apiVersion: '1',
   platforms: ['darwin'],
   architectures: ['arm64'],
@@ -603,7 +603,10 @@ export function createPluginRuntime({ socket, spawnHelper = spawn } = {}) {
       type: 'session_cancel',
       requestId,
       timestampMs: Date.now(),
-      reason: message
+      // The Host drops session_cancel messages whose reason exceeds its
+      // diagnostic byte limit; an unscoped recovery message concatenates a
+      // prefix with a bounded device error and can exceed it.
+      reason: truncateUtf8(message)
     });
     clearActive();
     diagnostic(message, 'error');
@@ -1456,6 +1459,28 @@ export function createPluginRuntime({ socket, spawnHelper = spawn } = {}) {
             !Array.isArray(message.config)
               ? message.config
               : {};
+          // New Host configuration commands carry a requestId and match the
+          // acknowledgement (or rejection) by it; legacy restore commands
+          // arrive without one and stay on the no-id acknowledgement form.
+          const configurationRequestId =
+            typeof message.requestId === 'string' && message.requestId.length > 0
+              ? message.requestId
+              : undefined;
+          const sendConfigured = () =>
+            send({
+              type: 'configured',
+              ...(configurationRequestId
+                ? { requestId: configurationRequestId }
+                : {})
+            });
+          const sendConfigurationRejected = (error) =>
+            send({
+              type: 'configuration_rejected',
+              ...(configurationRequestId
+                ? { requestId: configurationRequestId }
+                : {}),
+              error
+            });
           const hasPreferredDeviceId = Object.prototype.hasOwnProperty.call(
             config,
             'preferredDeviceId'
@@ -1480,7 +1505,10 @@ export function createPluginRuntime({ socket, spawnHelper = spawn } = {}) {
               !PERIPHERAL_UUID_PATTERN.test(config.preferredDeviceId.trim())
             ) {
               diagnostic('Invalid preferred AI Passport device id', 'error');
-              send({ type: 'configured' });
+              // Reject instead of acknowledging so the Host keeps the last
+              // valid persisted configuration instead of replaying an
+              // invalid device id on every reconnect.
+              sendConfigurationRejected('Invalid preferred AI Passport device id');
               return;
             }
             hasPreferredDeviceConfiguration = true;
@@ -1491,7 +1519,7 @@ export function createPluginRuntime({ socket, spawnHelper = spawn } = {}) {
               deviceId: preferredDeviceId
             });
           }
-          send({ type: 'configured' });
+          sendConfigured();
           if (clearPreferredDevice || (hasPreferredDeviceId && lastDevice)) {
             if (clearPreferredDevice) {
               state('ready', {

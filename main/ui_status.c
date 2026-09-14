@@ -1,12 +1,16 @@
 #include "ui_status.h"
 
+#include "bsp_battery.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "ui_battery.h"
 #include "vokie_symbol_asset.h"
+#include "vokie_title_font.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -15,44 +19,73 @@
 #define UI_WHITE 0xF6F8FC
 #define UI_INK 0x202A38
 #define UI_MUTED 0x7F8B9E
+#define UI_BATTERY_MUTED 0x646C78
 #define UI_BLUE 0x67D8FF
 #define UI_GREEN 0x78E0A4
 #define UI_ORANGE 0xFFB454
 #define UI_RED 0xFF7180
 #define UI_CONTENT_X 0
 #define UI_CONTENT_W BSP_LCD_W
-#define UI_HEADER_X 30
-#define UI_HEADER_W 180
-#define UI_HEADER_Y 20
+#define UI_HEADER_X 0
+#define UI_HEADER_W BSP_LCD_W
+#define UI_HEADER_Y 245
+#define UI_BATTERY_W 66
+#define UI_BATTERY_RIGHT_MARGIN 16
+#define UI_BATTERY_X (BSP_LCD_W - UI_BATTERY_RIGHT_MARGIN - UI_BATTERY_W)
+#define UI_BATTERY_Y 21
 #define UI_LOGO_SIZE 64
 #define UI_LOGO_X ((BSP_LCD_W - UI_LOGO_SIZE) / 2)
-#define UI_LOGO_Y 70
-#define UI_STATE_Y 178
-#define UI_DETAIL_Y 211
+// Center the visible 55 px artwork on the SEND row at y=159.
+#define UI_LOGO_Y 132
+#define UI_STATE_Y 53
+#define UI_DETAIL_Y 86
 #define UI_BRIGHTNESS_FULL 65
 #define UI_BRIGHTNESS_PROCESSING 38
 #define UI_BRIGHTNESS_DIM 18
 #define UI_HINT_TIMEOUT_US (3LL * 1000LL * 1000LL)
 #define UI_HINT_FADE_IN_MS 160
 #define UI_HINT_FADE_OUT_MS 220
+#define UI_HINT_GROUP_X 178
+#define UI_HINT_GROUP_Y 126
+#define UI_HINT_GROUP_W 42
+#define UI_HINT_ROW_H 22
 #define UI_DIM_TIMEOUT_US (3LL * 1000LL * 1000LL)
 #define UI_OFF_TIMEOUT_US (20LL * 1000LL * 1000LL)
+#define UI_BATTERY_POLL_US (30LL * 1000LL * 1000LL)
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_state;
 static lv_obj_t *s_detail;
-static lv_obj_t *s_dot;
 static lv_obj_t *s_button_hints;
+static lv_obj_t *s_hint_panel;
+static lv_obj_t *s_hint_lines[3];
+static lv_obj_t *s_hint_labels[3];
+static lv_obj_t *s_battery;
 static volatile int64_t s_last_touch_us;
 static volatile bool s_active;
 static volatile bool s_dirty;
-static volatile bool s_hints_requested;
+static volatile ui_status_hint_t s_hints_requested;
+static volatile bool s_hints_from_key;
 static volatile int64_t s_hints_deadline_us;
 static uint8_t s_backlight_level;
 static bool s_hints_visible;
+static ui_status_hint_t s_displayed_hints;
 static ui_status_state_t s_state_value;
 static char s_message[96];
 static TaskHandle_t s_task;
+
+// LVGL retains these arrays. Startup keeps all three original guide paths;
+// a single hint starts at the SEND row and points to its physical key.
+static const lv_point_precise_t s_hint_all_lines[3][4] = {
+    {{220, 137}, {225, 137}, {232, 57}, {238, 57}},
+    {{220, 159}, {225, 159}, {232, 159}, {238, 159}},
+    {{220, 181}, {225, 181}, {232, 261}, {238, 261}},
+};
+static const lv_point_precise_t s_hint_single_lines[3][4] = {
+    {{220, 159}, {225, 159}, {232, 57}, {238, 57}},
+    {{220, 159}, {225, 159}, {232, 159}, {238, 159}},
+    {{220, 159}, {225, 159}, {232, 261}, {238, 261}},
+};
 
 static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h, uint32_t color,
                      int radius)
@@ -144,11 +177,7 @@ static void draw_vokie(void)
 
 static void draw_button_rail(void)
 {
-    // The hints float above the centered layout and never push it sideways.
-    // They are hidden at rest and appear briefly after any physical-key action.
-    const int rail_w = 34;
-    const int x = BSP_LCD_W - 12 - rail_w;
-    const int ys[3] = {46, 148, 250};
+    // Button hints and leader lines appear after a physical-key action.
     const uint32_t colors[3] = {UI_ORANGE, UI_BLUE, UI_GREEN};
     const char *actions[3] = {"VOICE", "SEND", "UNDO"};
     s_button_hints = lv_obj_create(s_screen);
@@ -157,17 +186,65 @@ static void draw_button_rail(void)
     lv_obj_set_size(s_button_hints, BSP_LCD_W, BSP_LCD_H);
     lv_obj_remove_flag(s_button_hints, LV_OBJ_FLAG_SCROLLABLE);
     for (int i = 0; i < 3; ++i) {
-        lv_obj_t *card = box(s_button_hints, x, ys[i], rail_w, 22, UI_PANEL, 7);
-        lv_obj_t *text = label(card, actions[i], &lv_font_montserrat_10,
-                               colors[i], rail_w);
-        lv_obj_align(text, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_t *line = lv_line_create(s_button_hints);
+        s_hint_lines[i] = line;
+        lv_obj_remove_style_all(line);
+        lv_obj_set_pos(line, 0, 0);
+        lv_obj_set_size(line, BSP_LCD_W, BSP_LCD_H);
+        lv_line_set_points(line, s_hint_all_lines[i], 4);
+        lv_obj_set_style_line_width(line, 1, 0);
+        lv_obj_set_style_line_color(line, lv_color_hex(colors[i]), 0);
+        lv_obj_set_style_line_opa(line, LV_OPA_50, 0);
+        lv_obj_set_style_line_rounded(line, true, 0);
+    }
+    s_hint_panel = box(s_button_hints, UI_HINT_GROUP_X, UI_HINT_GROUP_Y,
+                       UI_HINT_GROUP_W, UI_HINT_ROW_H * 3, UI_PANEL, 7);
+    for (int i = 0; i < 3; ++i) {
+        lv_obj_t *text = label(s_button_hints, actions[i], &lv_font_montserrat_10,
+                               colors[i], UI_HINT_GROUP_W);
+        s_hint_labels[i] = text;
+        lv_obj_set_pos(text, UI_HINT_GROUP_X, UI_HINT_GROUP_Y +
+            i * UI_HINT_ROW_H + (UI_HINT_ROW_H - lv_font_montserrat_10.line_height) / 2);
     }
     lv_obj_add_flag(s_button_hints, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void set_button_hints_visible(bool visible)
+static void draw_battery(void)
 {
-    if (!s_button_hints || visible == s_hints_visible) return;
+    // Keep battery status visible whenever the screen is lit, independently
+    // of button hint fades. Battery updates do not wake the backlight.
+    s_battery = label(s_screen, LV_SYMBOL_BATTERY_EMPTY " --%",
+                      &lv_font_montserrat_12, UI_BATTERY_MUTED, UI_BATTERY_W);
+    lv_obj_set_style_text_align(s_battery, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(s_battery, LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(s_battery, UI_BATTERY_X, UI_BATTERY_Y);
+}
+
+static void set_button_hints_visible(ui_status_hint_t hints)
+{
+    if (!s_button_hints) return;
+    const bool visible = hints != UI_STATUS_HINT_NONE;
+    if (visible && hints != s_displayed_hints) {
+        const bool all = hints == UI_STATUS_HINT_ALL;
+        for (int i = 0; i < 3; ++i) {
+            if (hints & (1 << i)) {
+                lv_obj_set_y(s_hint_labels[i], UI_HINT_GROUP_Y +
+                    (all ? i : 1) * UI_HINT_ROW_H +
+                    (UI_HINT_ROW_H - lv_font_montserrat_10.line_height) / 2);
+                lv_line_set_points(s_hint_lines[i],
+                    all ? s_hint_all_lines[i] : s_hint_single_lines[i], 4);
+                lv_obj_remove_flag(s_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_flag(s_hint_lines[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_hint_lines[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        lv_obj_set_y(s_hint_panel, UI_HINT_GROUP_Y + (all ? 0 : UI_HINT_ROW_H));
+        lv_obj_set_height(s_hint_panel, (all ? 3 : 1) * UI_HINT_ROW_H);
+        s_displayed_hints = hints;
+    }
+    if (visible == s_hints_visible) return;
     s_hints_visible = visible;
     lv_anim_delete(s_button_hints, NULL);
     if (visible) {
@@ -187,8 +264,7 @@ static void render_state(void)
     lv_label_set_text(s_state, state_name(s_state_value));
     lv_obj_set_style_text_color(s_state, lv_color_hex(color), 0);
     lv_label_set_text(s_detail, s_message[0] ? s_message : "Vokie is ready");
-    lv_obj_set_style_bg_color(s_dot, lv_color_hex(color), 0);
-    set_button_hints_visible(s_hints_requested || s_active);
+    set_button_hints_visible(s_hints_requested);
     lv_obj_set_style_opa(s_screen, LV_OPA_COVER, 0);
     set_backlight(active_brightness());
     bsp_lvgl_unlock();
@@ -197,16 +273,43 @@ static void render_state(void)
 static void status_task(void *arg)
 {
     (void)arg;
+    int64_t next_battery_us = 0;
+    int battery_soc = -1;
+    int battery_mv = -1;
+    bool battery_dirty = true;
     for (;;) {
         if (s_dirty) {
             s_dirty = false;
             render_state();
         }
         const int64_t now_us = esp_timer_get_time();
-        if (s_screen && !s_active && s_hints_requested &&
+        if (now_us >= next_battery_us) {
+            // I2C may block for 100 ms. Keep it in this worker, outside the
+            // LVGL lock and button callbacks, and retry failed reads next time.
+            battery_soc = bsp_battery_soc();
+            battery_mv = bsp_battery_mv();
+            battery_dirty = true;
+            next_battery_us = esp_timer_get_time() + UI_BATTERY_POLL_US;
+        }
+        if (battery_dirty && bsp_lvgl_lock(100)) {
+            static const char *const icons[] = {
+                LV_SYMBOL_BATTERY_EMPTY, LV_SYMBOL_BATTERY_1,
+                LV_SYMBOL_BATTERY_2, LV_SYMBOL_BATTERY_3, LV_SYMBOL_BATTERY_FULL,
+            };
+            const ui_battery_view_t view = ui_battery_view(battery_soc, battery_mv);
+            lv_label_set_text_fmt(s_battery, "%s %s", icons[view.bars], view.text);
+            lv_obj_set_style_text_color(s_battery,
+                lv_color_hex(view.low ? UI_RED : UI_BATTERY_MUTED), 0);
+            battery_dirty = false;
+            // Battery refreshes must not wake the screen or reset idle timers.
+            bsp_lvgl_unlock();
+            ESP_LOGI("ui_status", "Battery display: %s (soc=%d, voltage=%dmV)",
+                     view.text, battery_soc, battery_mv);
+        }
+        if (s_screen && (!s_active || !s_hints_from_key) && s_hints_requested &&
             now_us >= s_hints_deadline_us && bsp_lvgl_lock(100)) {
-            s_hints_requested = false;
-            set_button_hints_visible(false);
+            s_hints_requested = UI_STATUS_HINT_NONE;
+            set_button_hints_visible(UI_STATUS_HINT_NONE);
             bsp_lvgl_unlock();
         }
         if (s_screen && s_active) {
@@ -224,6 +327,8 @@ void ui_status_init(void)
 {
     if (s_screen || !bsp_lvgl_lock(1000)) return;
     s_last_touch_us = esp_timer_get_time();
+    s_hints_deadline_us = s_last_touch_us + UI_HINT_TIMEOUT_US;
+    s_hints_requested = UI_STATUS_HINT_ALL;
     s_state_value = UI_STATUS_STARTING;
     s_message[0] = 0;
     s_screen = lv_obj_create(NULL);
@@ -231,16 +336,15 @@ void ui_status_init(void)
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(UI_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
 
-    // The main composition stays centered when the hints are hidden. The
-    // header uses its own narrow column so the status dot does not pull the
-    // title off-center.
-    lv_obj_t *caption = label(s_screen, "AI VOICE PASSPORT", &lv_font_montserrat_14,
+    // Center the bold brand title below the logo and the upper status group.
+    lv_obj_t *caption = label(s_screen, "Vokie Power",
+                              &vokie_title_barlow_condensed_bold_22,
                               UI_MUTED, UI_HEADER_W);
+    lv_label_set_long_mode(caption, LV_LABEL_LONG_CLIP);
     lv_obj_set_pos(caption, UI_HEADER_X, UI_HEADER_Y);
-    s_dot = box(s_screen, UI_HEADER_X + UI_HEADER_W - 7, UI_HEADER_Y + 5,
-                7, 7, UI_BLUE, 4);
     draw_vokie();
     draw_button_rail();
+    draw_battery();
 
     s_state = label(s_screen, "", &lv_font_montserrat_20, UI_BLUE, UI_CONTENT_W);
     lv_obj_set_pos(s_state, UI_CONTENT_X, UI_STATE_Y);
@@ -255,15 +359,21 @@ void ui_status_init(void)
     lv_screen_load(s_screen);
     bsp_lvgl_unlock();
     render_state();
-    xTaskCreate(status_task, "ui_status", 2048, NULL, 2, &s_task);
+    // Battery I2C and diagnostic/error logging need additional stack headroom.
+    if (xTaskCreate(status_task, "ui_status", 3072, NULL, 2, &s_task) != pdPASS) {
+        ESP_LOGE("ui_status", "Failed to start status worker");
+    }
 }
 
-void ui_status_touch(void)
+void ui_status_touch(ui_status_hint_t hint)
 {
+    if (hint != UI_STATUS_HINT_VOICE && hint != UI_STATUS_HINT_SEND &&
+        hint != UI_STATUS_HINT_UNDO && hint != UI_STATUS_HINT_ALL) return;
     const int64_t now_us = esp_timer_get_time();
     s_last_touch_us = now_us;
     s_hints_deadline_us = now_us + UI_HINT_TIMEOUT_US;
-    s_hints_requested = true;
+    s_hints_requested = hint;
+    s_hints_from_key = true;
     s_dirty = true;
     if (s_screen) set_backlight(active_brightness());
 }

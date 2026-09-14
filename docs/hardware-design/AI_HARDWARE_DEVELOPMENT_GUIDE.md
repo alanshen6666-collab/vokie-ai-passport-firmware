@@ -33,7 +33,7 @@ The target is the ESP32-C3 FoloToy AI Passport with ESP-IDF 5.5.3. It has 8 MB F
 | Backlight | LCD LED | GPIO21, LEDC 5 kHz/10 bit | Activity and timeout brightness policy |
 | Buttons | UP/DOWN/OK resistor ladder | GPIO0 / ADC1_CH0 | PTT, send, delete, clear, and cancel events |
 | Audio | ES8311 microphone capture | shared I2C + I2S0 full duplex | 16 kHz mono PCM for BLE transport |
-| Battery | CW2017 fuel gauge | shared I2C0, address `0x63` | BSP driver available; not used by the current status UI |
+| Battery | CW2017 fuel gauge | shared I2C0, address `0x63` | Status UI SOC percentage, or measured voltage when SOC is invalid |
 | Wi-Fi | Not used by the current firmware | no Wi-Fi application path | Not compiled into the Vokie application |
 | Bluetooth LE | NimBLE peripheral | Vokie BLE V1 service | Connectable advertising and notifications |
 | Low power | Backlight timeout only | ESP-IDF timer + FreeRTOS task | No light/deep-sleep application mode |
@@ -97,7 +97,7 @@ app_main
        └─ control/audio notifications
 ```
 
-Display/LVGL is a hard dependency for the status UI. Audio and buttons are initialized by `vokie_ble_start()`; failure is logged and the application cannot provide voice input. The CW2017 driver remains available through the BSP but is not initialized by the current Vokie application. Public BSP APIs are under `components/bsp/include/`; most initialization is idempotent, but there is no universal BSP deinitialization API.
+Display/LVGL is a hard dependency for the status UI. Audio and buttons are initialized by `vokie_ble_start()`; failure is logged and the application cannot provide voice input. The application initializes the optional CW2017 through the BSP before starting UI and audio workers; initialization failure does not stop startup. Public BSP APIs are under `components/bsp/include/`; most initialization is idempotent, but there is no universal BSP deinitialization API.
 
 NimBLE, the Vokie BLE V1 service, and the audio worker use ESP-IDF directly rather than the BSP. The application maintains one connectable BLE session, requires both control and audio notifications to be subscribed, and sends 20 ms microphone frames only after the host is ready. Do not erase NVS to hide partition errors; the protected identity and Recovery layout is outside the community application image.
 
@@ -156,14 +156,18 @@ The Vokie audio worker keeps one 320-sample PCM buffer and one 166-byte ADPCM bu
 
 ## 9. CW2017 fuel gauge
 
-Initialization reads VERSION, writes CONFIG `0x00`, waits 100 ms, and uses the chip's built-in Li-Poly profile. The repository intentionally does not write a custom cell profile.
+Initialization uses the stock 520 mAh cell profile published in [FoloToy PR #38](https://github.com/FoloToy/ai-passport/pull/38), pinned to [commit `7eeb76db`](https://github.com/FoloToy/ai-passport/blob/7eeb76dbdf4038cda70817a1852b7737cdad36bc/components/bsp/src/bsp_battery.c). It reads VERSION and compares both UPDATE_FLAG and all 80 profile bytes. A missing flag or mismatch triggers the upstream sleep sequence, byte-by-byte upload, full readback verification, setting UPDATE_FLAG while preserving the alert threshold, and activation. A matching profile is not rewritten. Normal mode is checked before polling for the first valid SOC at 100 ms intervals, up to 50 attempts (plus I2C transaction time). Failure releases the device handle for a later retry.
+
+Initialize serially before UI/audio workers start. Initialization and reads may block and must stay outside button callbacks and the LVGL task. The profile is specific to the standard-production 520 mAh cell; a replacement cell needs its matching vendor-generated profile and renewed charge/discharge validation. This updates only the CW2017 profile registers, not ESP32 NVS, identity, partition layout, or Recovery.
 
 - SOC uses registers `0x04–0x05`; values above 100 are treated as not ready and return `-1`.
-- Voltage uses the 14-bit value at `0x02–0x03`, converted as `raw × 312.5 µV`, and returned in mV.
+- Voltage uses the 14-bit value at `0x02–0x03`, converted as `raw × 312.5 µV`, and returned in mV. Reads outside the datasheet measurement range of 2500–4900 mV return `-1`.
 - Transactions use a 100 ms timeout at 100 kHz.
-- A missing device returns `ESP_ERR_NOT_FOUND`; the current Vokie status UI does not depend on the battery driver and continues without a battery reading.
+- A missing device returns `ESP_ERR_NOT_FOUND`; the status UI continues with `--%`. A gauge absent at initialization is detected again on the next boot.
 
-Accurate production SOC requires the cell parameters, CW2017 datasheet/vendor profile, and full charge/discharge validation.
+The status worker reads SOC immediately and then every 30 seconds, outside the LVGL lock. Under the lock it updates the battery icon and percentage in the top-right corner. The battery stays visible whenever the screen is lit and is independent of the VOICE/SEND/UNDO overlay. Startup shows all three hints and leader lines for three seconds, then fades them out even if the host becomes active. UP selects VOICE, DOWN selects SEND, and OK selects UNDO: only the selected label, its line, and its single-row background appear. Single hints occupy the original middle SEND row; their lines start there and retain the corresponding physical-key endpoint. The all-hints layout retains its original three rows and line paths. A different key replaces the selection immediately. Hints requested by a key remain visible during recording/processing and fade out after the last key has been idle for three seconds. The independent hardware power button has no application press callback, so it cannot reveal hints while running. A host state change cannot reveal hidden hints. Background battery updates neither reveal the hints nor reset idle timers or wake the backlight; screen dimming and sleep remain unchanged. Readings at 0–20% are red; the icon and text at 21–100% use subdued gray (`#646C78`). Invalid SOC clears the previous percentage and displays valid measured voltage (for example `3.94V`) with a neutral battery outline; only when both readings are unavailable does it show `--%`. Later valid SOC restores the percentage. Voltage is not converted to estimated SOC. The BSP exposes no charging-state API, so the UI does not indicate charging.
+
+An I2C response and plausible voltage do not guarantee valid SOC: an empty profile can leave SOC out of range until the matching cell profile is installed. Immediately after installation, readings may still settle or temporarily use the voltage fallback. Validate full charge/discharge accuracy separately from initialization and UI behavior.
 
 ## 10. Flash, console, and memory
 
@@ -232,7 +236,7 @@ General board acceptance for this firmware:
 | LCD | color blocks, orientation, clipping, inversion, byte order, backlight levels |
 | ADC/buttons | released and pressed mV, UP/DOWN/OK click/long events, margin across battery levels |
 | Codec/I2S | non-zero 16 kHz capture, correct frame timing, format setup, disconnect/stop behavior |
-| Battery | plausible SOC/mV when the BSP driver is explicitly exercised, graceful missing-device behavior |
+| Battery | plausible SOC/voltage, 0/20/21/100%, voltage fallback and unknown display, read-failure recovery, missing-device startup, no overlap with key hints, unchanged backlight timeout, stable concurrent recording |
 | Bluetooth LE | `Vokie Passport` advertising, connection, subscriptions, hello, notifications, reconnect |
 | DMA/memory/UI | build memory report, runtime minimum heap/largest block, stable concurrent audio/display |
 

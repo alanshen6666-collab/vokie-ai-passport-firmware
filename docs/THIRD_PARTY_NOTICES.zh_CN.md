@@ -20,3 +20,5 @@ ESP-IDF Managed Component 的版本锁定在 [`dependencies.lock`](../dependenci
 本表仅为阅读便利，不能替代各依赖随附的许可证文件。再次分发依赖源码或编译后的固件时，应根据实际锁定版本附带适用的许可证、版权声明、NOTICE 和组件内第三方文件。
 
 Vokie 名称与图形标识不是第三方软件依赖，也不在 MIT 授权范围内；其独立再分发条款见 [`LICENSES/Vokie-Brand-Asset.txt`](../LICENSES/Vokie-Brand-Asset.txt)。
+
+居中的 Vokie 标题使用 Barlow Condensed Bold 子集，版权归 2017 The Barlow Project Authors 所有，按 SIL Open Font License 1.1 分发。再次分发源码及固件时须保留[完整字体许可](../LICENSES/Barlow-OFL.txt)。来源与转换说明见[资源目录](../assets/README.zh_CN.md#vokie-标题字体)。

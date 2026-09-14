@@ -31,3 +31,5 @@ and any component-specific third-party files from the exact resolved versions.
 The Vokie name and symbol are not third-party software dependencies and are not
 covered by MIT. Their separate redistribution terms are in
 [`LICENSES/Vokie-Brand-Asset.txt`](../LICENSES/Vokie-Brand-Asset.txt).
+
+The centered Vokie title uses a subset of Barlow Condensed Bold, Copyright 2017 The Barlow Project Authors, under the SIL Open Font License 1.1. Preserve [the complete font license](../LICENSES/Barlow-OFL.txt) with redistributed source and firmware. The source and conversion details are in [Assets](../assets/README.md#vokie-title-font).

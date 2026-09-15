@@ -1,6 +1,7 @@
 #include "vokie_ble.h"
 
 #include "bsp_audio.h"
+#include "boot_sound.h"
 #include "ui_status.h"
 #include "bsp_button.h"
 #include "cJSON.h"
@@ -24,6 +25,8 @@
 
 static const char *TAG = "vokie_ble";
 static const char *DEVICE_NAME = "Vokie Passport";
+extern const uint8_t boot_pcm_start[] asm("_binary_vokie_boot_16k_pcm_start");
+extern const uint8_t boot_pcm_end[] asm("_binary_vokie_boot_16k_pcm_end");
 static const uint16_t NO_CONN = BLE_HS_CONN_HANDLE_NONE;
 
 #define AUDIO_SAMPLES 320
@@ -165,9 +168,23 @@ static int notify_audio(uint32_t session, uint32_t sequence, const uint8_t *payl
     return 0;
 }
 
+static bool boot_recording_requested(void)
+{
+    return s_recording;
+}
+
 static void audio_task(void *arg)
 {
     (void)arg;
+    // Runs once per boot, outside button/LVGL callbacks. Keep the existing
+    // microphone format and prioritize a voice request over the startup sound.
+    esp_err_t boot_err = boot_sound_play(boot_pcm_start,
+                                        boot_pcm_end - boot_pcm_start,
+                                        boot_recording_requested);
+    if (boot_err != ESP_OK) {
+        ESP_LOGW(TAG, "Boot sound unavailable: %s; continuing voice input",
+                 esp_err_to_name(boot_err));
+    }
     int16_t pcm[AUDIO_SAMPLES];
     uint8_t encoded[ADPCM_BYTES];
     uint32_t sequence = 0;

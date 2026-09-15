@@ -4,6 +4,21 @@
 
 # 资源目录（Assets）
 
+## Vokie 开机音
+
+- 来源：用户提供的 `v2-blip-octave-tail.wav`，保留为 [vokie-boot-v2-blip-octave-tail.wav](music/vokie-boot-v2-blip-octave-tail.wav)。用户已授权随本固件收录和分发；未提供单独的素材许可。
+- 原始格式：2 秒、44.1 kHz、有符号 16 位单声道 WAV。
+- 固件素材：[vokie-boot-16k.pcm](music/vokie-boot-16k.pcm)，16 kHz、有符号 16 位小端单声道 PCM，共 64,000 字节；不做响度归一化或变速。
+- 集成：`main/CMakeLists.txt` 仅将 PCM 嵌入闪存。`main/boot_sound.c` 使用 640 字节栈缓冲区，在已有音频任务中以 55/100 输出音量每次开机播放一次；收到录音请求时让位，补零排空播放队列、静音并丢弃开机期间的麦克风采样。保持录音格式及麦克风增益，播放失败仅记录日志，不阻止语音输入。
+
+在仓库根目录重新生成：
+
+```bash
+ffmpeg -nostdin -i assets/music/vokie-boot-v2-blip-octave-tail.wav \
+  -ar 16000 -ac 1 -c:a pcm_s16le -f s16le \
+  assets/music/vokie-boot-16k.pcm
+```
+
 本目录集中存放可复用的资源（字库、图片、音乐等），按资源类型分子目录管理。每个资源放在其类型对应的子目录，并记录放置路径、命名方式、集成方式与来源/许可。二进制资源（字体、图片、音频）不属于纯 markdown 文档，请勿与文档混放。涉及版权/授权的资源需注明来源与许可。
 
 ## 字库（fonts）

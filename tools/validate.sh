@@ -32,6 +32,11 @@ run_static_checks() {
         tests/test_ui_battery.c -o "${test_dir}/test_ui_battery"
     "${test_dir}/test_ui_battery"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Itests/battery_stubs -Icomponents/bsp/include -Imain \
+        tests/test_boot_sound.c main/boot_sound.c \
+        -o "${test_dir}/test_boot_sound"
+    "${test_dir}/test_boot_sound"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
         -Itests/battery_stubs -Icomponents/bsp/include \
         tests/test_bsp_battery.c components/bsp/src/bsp_battery.c \
         -o "${test_dir}/test_bsp_battery"

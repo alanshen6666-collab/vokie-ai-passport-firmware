@@ -4,6 +4,21 @@
 
 # Assets
 
+## Vokie startup sound
+
+- Source: the creator-supplied `v2-blip-octave-tail.wav`, saved as [vokie-boot-v2-blip-octave-tail.wav](music/vokie-boot-v2-blip-octave-tail.wav). The creator authorized inclusion and distribution with this firmware; no separate asset license was supplied.
+- Source format: 2 seconds, 44.1 kHz, signed 16-bit mono WAV.
+- Firmware asset: [vokie-boot-16k.pcm](music/vokie-boot-16k.pcm), 16 kHz signed 16-bit little-endian mono PCM, 64,000 bytes. No normalization or speed change is applied.
+- Integration: `main/CMakeLists.txt` embeds only the PCM in flash. `main/boot_sound.c` uses a 640-byte stack buffer on the existing audio worker, at output volume 55/100. Playback runs once per boot and yields to recording. Silence drains playback, then output is muted and startup microphone samples are discarded. The microphone format and gain stay unchanged; playback failure is logged without preventing voice input.
+
+Regenerate from the repository root:
+
+```bash
+ffmpeg -nostdin -i assets/music/vokie-boot-v2-blip-octave-tail.wav \
+  -ar 16000 -ac 1 -c:a pcm_s16le -f s16le \
+  assets/music/vokie-boot-16k.pcm
+```
+
 This directory stores reusable fonts, images, music, and sound effects, organized by asset type.
 
 Keep each asset in the matching subdirectory and document its destination, naming, integration method, and source/license. Do not mix binary assets with Markdown documentation.

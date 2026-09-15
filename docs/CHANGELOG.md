@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- Added the two-second Vokie startup sound at moderate volume. It plays once per boot on the audio worker, yields to voice capture, and mutes and clears startup microphone samples before recording.
+
 - Keep the status screen in OFFLINE until Vokie completes the BLE handshake; DOWN and OK no longer change an unconnected device to READY.
 - Placed VOICE/SEND/UNDO close to the right edge with subtle leader lines to their keys. Each right-side key reveals only its matching label and line. Single hints share the middle SEND position, with a compact one-row background and a line from that position to the corresponding physical key; a new key replaces the previous selection. Startup retains the original three label positions and guide paths, shows all three for three seconds, then fades them out. The hardware power button has no application press event.
 - Placed the voice state and supporting text above the logo, with the top of READY aligned to the upper key guide. Moved Vokie Power below the logo, with the title's bottom aligned to the lower key guide. The logo's visual center aligns with the SEND row, and all main content remains horizontally centered.

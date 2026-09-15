@@ -25,6 +25,8 @@ text insertion.
 
 ## Features
 
+- A two-second Vokie sound plays once at startup and yields to voice capture.
+
 - Click-to-toggle voice capture from the top `UP` button.
 - 16 kHz, 16-bit, mono microphone capture through the ES8311 codec.
 - Independent 20 ms IMA ADPCM frames transported over BLE notifications.

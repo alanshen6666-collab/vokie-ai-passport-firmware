@@ -34,3 +34,8 @@ struct _lv_display_t *bsp_lvgl_init(void);
 // LVGL 非线程安全:在【非 LVGL 任务】里操作任何 lv_* 对象前后必须加解锁。
 bool bsp_lvgl_lock(int timeout_ms);
 void bsp_lvgl_unlock(void);
+
+// Pause/resume display refresh, animations and the LVGL tick while off.
+// Caller holds bsp_lvgl_lock(); only the UI worker changes this state.
+// Does not power down the LCD controller or delete any LVGL objects.
+esp_err_t bsp_lvgl_set_paused(bool paused);

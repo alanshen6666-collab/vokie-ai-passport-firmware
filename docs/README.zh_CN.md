@@ -22,7 +22,7 @@ FoloToy AI Passport 是一个开放式可穿戴 AI 硬件。本仓库保留上�
 | 输入 | `UP` / `DOWN` / `OK` 三键，共用 GPIO0 ADC 电阻分压；映射为 PTT、发送、删除、清空与取消 | `bsp_button_init()`、`bsp_button_read_mv()` | 回调运行在 button 组件任务中，不能阻塞；不能再创建第二个 ADC1 unit |
 | 音频 | ES8311 以 16 kHz、16-bit、单声道采集麦克风；每 20 ms 独立编码为 IMA ADPCM | `bsp_audio_*`、`vokie_ble_start()` | PCM 读取是阻塞调用并运行在工作任务；录音要求兼容 BLE 主机完成订阅且 ATT MTU 不小于 185 |
 | Bluetooth LE | 以 `Vokie Passport` 名义进行可连接 NimBLE 广播；提供 Control、Audio 与 Device info 特征 | `vokie_ble_*` | 仅允许一个连接；协议 V1 不提供配对、对端身份认证或应用层加密 |
-| 背光 | 活动时 65%，处理时 38%，3 秒后降至 18%，20 秒后关闭 | `ui_status_touch()`、`ui_status_set_state()` | 只控制背光，不会让 ESP32-C3 或 LCD 控制器进入深度睡眠 |
+| 背光 | 活动时 65%，处理时 38%，3 秒后降至 18%，20 秒后关闭 | `ui_status_touch()`、`ui_status_set_state()` | 熄屏暂停 LVGL 工作，音频闲置时允许自动轻睡眠；LCD 控制器仍供电，BLE 保持启用 |
 | 保护存储 | 3 MB factory app，以及固定的 `cardid` 和永久 Recovery 区域 | `partitions.csv`、bootloader hook | 不得覆盖已写入的设备身份或 Recovery 载荷；使用文档规定的安装路径 |
 | 日志与烧录 | ESP32-C3 原生 USB Serial/JTAG | ESP-IDF console | GPIO18/19 保留给 USB；UART0 默认 TX GPIO21 与背光冲突 |
 

@@ -22,7 +22,7 @@ The table below describes the hardware and application capabilities used by the 
 | Input | `UP`, `DOWN`, and `OK` share an ADC resistor ladder on GPIO0; mapped to PTT, send, delete, clear, and cancel | `bsp_button_init()`, `bsp_button_read_mv()` | Callbacks run in the button component task and must not block; do not create a second ADC1 unit |
 | Audio | ES8311 microphone capture at 16 kHz, 16-bit mono; independent 20 ms IMA ADPCM frames | `bsp_audio_*`, `vokie_ble_start()` | PCM reads block and run in a worker task; recording requires a subscribed compatible BLE host and ATT MTU 185 or greater |
 | Bluetooth LE | Connectable NimBLE peripheral advertising as `Vokie Passport`; Control, Audio, and Device info characteristics | `vokie_ble_*` | Single connection; protocol V1 has no pairing, peer authentication, or application-layer encryption |
-| Backlight | 65% active, 38% processing, 18% dim after 3 seconds, off after 20 seconds | `ui_status_touch()`, `ui_status_set_state()` | This switches the backlight only; it does not put the ESP32-C3 or LCD controller into deep sleep |
+| Backlight | 65% active, 38% processing, 18% dim after 3 seconds, off after 20 seconds | `ui_status_touch()`, `ui_status_set_state()` | Screen-off pauses LVGL work and permits automatic light sleep when audio is idle; LCD controller power remains on and BLE stays enabled |
 | Protected storage | 3 MB factory app plus fixed `cardid` and permanent Recovery regions | `partitions.csv`, bootloader hook | Do not overwrite provisioned identity or Recovery payloads; use the documented installation paths |
 | Logging and flashing | Native ESP32-C3 USB Serial/JTAG | ESP-IDF console | GPIO18/19 are reserved for USB; the default UART0 TX on GPIO21 conflicts with the backlight |
 

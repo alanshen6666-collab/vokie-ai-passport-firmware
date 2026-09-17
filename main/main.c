@@ -2,6 +2,7 @@
 #include "bsp_display.h"
 #include "bsp_i2c.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "lvgl.h"
 #include "nvs_flash.h"
 #include "vokie_ble.h"
@@ -12,6 +13,14 @@ static const char *TAG = "main";
 void app_main(void)
 {
     ESP_LOGI(TAG, "Vokie AI Passport firmware starting");
+#if CONFIG_PM_ENABLE
+    const esp_pm_config_t power = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 40,
+        .light_sleep_enable = true,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&power));
+#endif
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

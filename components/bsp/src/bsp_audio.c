@@ -8,6 +8,7 @@
 #include "es8311_codec.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 
 static const char *TAG = "bsp_audio";
 
@@ -17,6 +18,9 @@ static i2s_chan_handle_t      s_tx, s_rx;
 static uint32_t s_hz;
 static uint8_t  s_bits, s_ch;
 static bool     s_opened;
+#if CONFIG_PM_ENABLE
+static esp_pm_lock_handle_t s_sleep_lock;
+#endif
 
 static esp_err_t i2s_full_duplex_init(void) {
     i2s_chan_config_t chan = {
@@ -63,11 +67,7 @@ static esp_err_t i2s_full_duplex_init(void) {
     if ((e = i2s_channel_init_std_mode(s_rx, &std)) != ESP_OK) {
         ESP_LOGE(TAG, "i2s rx 初始化失败: %s", esp_err_to_name(e)); return e;
     }
-    // esp_codec_dev_open 内部重配前会先 i2s_channel_disable,而 disable 要求通道处于
-    // RUNNING;刚 init 的通道是 READY,会打一条 "channel has not been enabled yet" 错误日志。
-    // 这里先 enable 一次让那次 disable 合法(此时 codec 未配,不出声)。
-    i2s_channel_enable(s_tx);
-    i2s_channel_enable(s_rx);
+    // Leave both channels stopped until set_format() opens the codec.
     return ESP_OK;
 }
 
@@ -126,13 +126,23 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     if (!s_dev) return ESP_ERR_INVALID_STATE;
     if (s_opened && s_hz == hz && s_bits == bits && s_ch == ch) return ESP_OK;   // 同格式复用
 
-    if (s_opened) {
-        esp_codec_dev_close(s_dev);
-        s_opened = false;
-        // close 把 I2S 通道退回 READY,而接下来的 open 内部又会 disable 一次 →
-        // 会打 "channel has not been enabled yet"。补一次 enable 让它合法。
-        if (s_tx) i2s_channel_enable(s_tx);
-        if (s_rx) i2s_channel_enable(s_rx);
+    esp_err_t err = bsp_audio_suspend();
+    if (err != ESP_OK) return err;
+#if CONFIG_PM_ENABLE
+    if (!s_sleep_lock) {
+        err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "audio", &s_sleep_lock);
+        if (err != ESP_OK) return err;
+    }
+    ESP_ERROR_CHECK(esp_pm_lock_acquire(s_sleep_lock));
+#endif
+    // esp_codec_dev reconfiguration disables both channels first. This is
+    // required after every close, not just when changing the sample format.
+    err = i2s_channel_enable(s_tx);
+    if (err != ESP_OK) goto release_lock;
+    err = i2s_channel_enable(s_rx);
+    if (err != ESP_OK) {
+        i2s_channel_disable(s_tx);
+        goto release_lock;
     }
 
     esp_codec_dev_sample_info_t fs = {
@@ -143,7 +153,13 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
         .mclk_multiple = 0,          // 0 → 驱动按默认 256xfs 取 MCLK
     };
     int r = esp_codec_dev_open(s_dev, &fs);
-    if (r != 0) { ESP_LOGE(TAG, "esp_codec_dev_open 失败: %d", r); return ESP_FAIL; }
+    if (r != 0) {
+        ESP_LOGE(TAG, "esp_codec_dev_open 失败: %d", r);
+        // open can fail after enabling DMA or setting its internal open flags.
+        esp_codec_dev_close(s_dev);
+        err = ESP_FAIL;
+        goto release_lock;
+    }
 
     // ⚠ open 之后【不要】手动覆写 ES8311 的时钟分频寄存器(REG01~06):
     //   驱动已按采样率与 MCLK 精确算好,覆写会导致 ADC/DAC 时序错乱、录音回放全是杂音。
@@ -153,15 +169,32 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     s_opened = true; s_hz = hz; s_bits = bits; s_ch = ch;
     ESP_LOGI(TAG, "codec 打开 %luHz/%ubit/%uch", (unsigned long)hz, bits, ch);
     return ESP_OK;
+
+release_lock:
+#if CONFIG_PM_ENABLE
+    ESP_ERROR_CHECK(esp_pm_lock_release(s_sleep_lock));
+#endif
+    return err;
+}
+
+esp_err_t bsp_audio_suspend(void) {
+    if (!s_opened) return ESP_OK;
+    esp_codec_dev_set_out_vol(s_dev, 0);
+    if (esp_codec_dev_close(s_dev) != 0) return ESP_FAIL;
+    s_opened = false;
+#if CONFIG_PM_ENABLE
+    ESP_ERROR_CHECK(esp_pm_lock_release(s_sleep_lock));
+#endif
+    return ESP_OK;
 }
 
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes) {
-    if (!s_dev) return ESP_ERR_INVALID_STATE;
+    if (!s_dev || !s_opened) return ESP_ERR_INVALID_STATE;
     return esp_codec_dev_write(s_dev, (void *)pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
-    if (!s_dev) return ESP_ERR_INVALID_STATE;
+    if (!s_dev || !s_opened) return ESP_ERR_INVALID_STATE;
     return esp_codec_dev_read(s_dev, pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 

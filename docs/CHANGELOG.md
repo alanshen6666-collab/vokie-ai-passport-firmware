@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- Keep native USB Serial/JTAG connected while automatic light sleep is enabled: inhibit light sleep while USB is attached, and permit it again after unplugging. This prevents the ESP32-C3 console from disappearing during startup or screen-off.
+
+- Reduced screen-off standby activity: close idle ES8311/I2S streams, wait for recording events, pause LVGL ticks/refresh/animations while off, and enable dynamic frequency scaling plus automatic light sleep with BLE modem sleep. ADC keys use 20 ms scanning; duplicate host states no longer restart the display timeout. Actual current savings and wake/audio behavior still require board measurements.
+
 - Added the two-second Vokie startup sound at moderate volume. It plays once per boot on the audio worker, yields to voice capture, and mutes and clears startup microphone samples before recording.
 
 - Keep the status screen in OFFLINE until Vokie completes the BLE handshake; DOWN and OK no longer change an unconnected device to READY.

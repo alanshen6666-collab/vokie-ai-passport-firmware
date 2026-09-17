@@ -4,10 +4,14 @@
 #include "bsp_pins.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "bsp_lvgl";
 
 static lv_display_t *s_disp;
+static bool s_paused;
+static bool s_anim_was_paused;
+static int64_t s_paused_at_us;
 
 lv_display_t *bsp_lvgl_init(void) {
     if (s_disp) return s_disp;
@@ -46,3 +50,29 @@ lv_display_t *bsp_lvgl_init(void) {
 
 bool bsp_lvgl_lock(int timeout_ms) { return lvgl_port_lock(timeout_ms); }
 void bsp_lvgl_unlock(void)         { lvgl_port_unlock(); }
+
+esp_err_t bsp_lvgl_set_paused(bool paused) {
+    if (!s_disp) return ESP_ERR_INVALID_STATE;
+    if (paused == s_paused) return ESP_OK;
+    if (paused) {
+        esp_err_t err = lvgl_port_stop();
+        // LVGL 9.5 returns 1 ms from lv_timer_handler() when globally disabled.
+        // Keep the handler enabled so paused timers yield LV_NO_TIMER_READY
+        // and the port task can use its 500 ms maximum wait instead.
+        lv_timer_enable(true);
+        if (err != ESP_OK) return err;
+        lv_timer_pause(lv_display_get_refr_timer(s_disp));
+        s_anim_was_paused = lv_timer_get_paused(lv_anim_get_timer());
+        lv_timer_pause(lv_anim_get_timer());
+        s_paused_at_us = esp_timer_get_time();
+    } else {
+        esp_err_t err = lvgl_port_resume();
+        if (err != ESP_OK) return err;
+        lv_tick_inc((uint32_t)((esp_timer_get_time() - s_paused_at_us) / 1000));
+        lv_timer_resume(lv_display_get_refr_timer(s_disp));
+        if (!s_anim_was_paused) lv_timer_resume(lv_anim_get_timer());
+        lv_obj_invalidate(lv_display_get_screen_active(s_disp));
+    }
+    s_paused = paused;
+    return ESP_OK;
+}

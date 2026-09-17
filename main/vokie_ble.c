@@ -178,9 +178,12 @@ static void audio_task(void *arg)
     (void)arg;
     // Runs once per boot, outside button/LVGL callbacks. Keep the existing
     // microphone format and prioritize a voice request over the startup sound.
-    esp_err_t boot_err = boot_sound_play(boot_pcm_start,
-                                        boot_pcm_end - boot_pcm_start,
-                                        boot_recording_requested);
+    esp_err_t boot_err = bsp_audio_set_format(16000, 16, 1);
+    if (boot_err == ESP_OK) {
+        boot_err = boot_sound_play(boot_pcm_start,
+                                  boot_pcm_end - boot_pcm_start,
+                                  boot_recording_requested);
+    }
     if (boot_err != ESP_OK) {
         ESP_LOGW(TAG, "Boot sound unavailable: %s; continuing voice input",
                  esp_err_to_name(boot_err));
@@ -188,21 +191,57 @@ static void audio_task(void *arg)
     int16_t pcm[AUDIO_SAMPLES];
     uint8_t encoded[ADPCM_BYTES];
     uint32_t sequence = 0;
+    uint32_t capture_session = 0;
+    bool capturing = false;
     for (;;) {
-        if (!s_recording) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-        if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
-            s_stop_requested = true; send_error(s_session, "audio_read");
-            s_recording = false; continue;
+        if (!s_recording) {
+            capturing = false;
+            sequence = 0;
+            ESP_ERROR_CHECK(bsp_audio_suspend());
+            // A request during suspend leaves a pending notification. Do not
+            // clear notifications separately from this atomic wait.
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
         }
+        if (!capturing || capture_session != s_session) {
+            capture_session = s_session;
+            sequence = 0;
+            ESP_ERROR_CHECK(bsp_audio_suspend());
+            if (bsp_audio_set_format(16000, 16, 1) != ESP_OK) {
+                if (s_recording && capture_session == s_session) {
+                    s_recording = false;
+                    s_stop_requested = false;
+                    send_error(capture_session, "audio_open");
+                    ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+                }
+                continue;
+            }
+            capturing = true;
+        }
+        if (!s_recording || capture_session != s_session) continue;
+        if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
+            if (s_recording && capture_session == s_session) {
+                s_stop_requested = false;
+                send_error(capture_session, "audio_read");
+                s_recording = false;
+                ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+            }
+            continue;
+        }
+        // A disconnect or a new session during blocking I/O invalidates PCM.
+        if (!s_recording || capture_session != s_session) continue;
         if (!s_audio_subscribed || ble_att_mtu(s_conn) < 185) {
-            s_stop_requested = true; send_error(s_session, "mtu");
-            s_recording = false; continue;
+            s_stop_requested = false; send_error(s_session, "mtu");
+            s_recording = false;
+            ui_status_set_state(UI_STATUS_ERROR, "BLE audio unavailable");
+            continue;
         }
         size_t encoded_len = encode_adpcm(pcm, encoded);
         if (notify_audio(s_session, sequence++, encoded, encoded_len) != 0) {
             s_stop_requested = true;
             send_error(s_session, "transport");
             s_recording = false;
+            ui_status_set_state(UI_STATUS_ERROR, "BLE send failed");
         }
         if (s_stop_requested) {
             char json[MAX_CONTROL + 1];
@@ -231,14 +270,17 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
             s_session = esp_random();
             if (s_session == 0) s_session = 1;
             s_control_seq = 0;
-            s_recording = true;
-            ui_status_set_state(UI_STATUS_RECORDING, "Listening");
+            s_stop_requested = false;
             char json[MAX_CONTROL + 1];
             snprintf(json, sizeof(json), "{\"v\":1,\"type\":\"ptt_down\",\"sessionId\":%lu,\"seq\":0}",
                      (unsigned long)s_session);
             if (notify_control(json) != 0) {
                 s_recording = false;
                 ui_status_set_state(UI_STATUS_ERROR, "BLE send failed");
+            } else if (host_is_ready()) {
+                s_recording = true;
+                ui_status_set_state(UI_STATUS_RECORDING, "Listening");
+                if (s_audio_task) xTaskNotifyGive(s_audio_task);
             }
         } else {
             s_stop_requested = true;
@@ -406,11 +448,7 @@ esp_err_t vokie_ble_start(void)
     if (s_started) return ESP_OK;
     esp_err_t err = bsp_audio_init();
     if (err != ESP_OK) return err;
-    // bsp_audio_init() creates the codec but does not open a stream format.
-    // Open the microphone as the exact PCM format advertised over BLE;
-    // otherwise the first bsp_audio_read() fails and immediately ends PTT.
-    err = bsp_audio_set_format(16000, 16, 1);
-    if (err != ESP_OK) return err;
+    // The worker owns stream open/close as well as all PCM I/O.
     if (bsp_button_init(button_cb, NULL) != ESP_OK) return ESP_FAIL;
     int rc = nimble_port_init(); if (rc != ESP_OK) return ESP_FAIL;
     ble_svc_gap_init(); ble_svc_gatt_init(); ble_svc_gap_device_name_set(DEVICE_NAME);

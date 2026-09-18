@@ -9,6 +9,12 @@
 static int tx, rx, token, locks, opens, closes, volume, prime_reads;
 static bool first_rx_word, fail_prime;
 static bool fail_open, fail_tx, fail_rx, fail_stop_tx, fail_stop_rx, codec_on;
+static int dac_power, dac_mute;
+static bool fail_mute_write, fail_power_write, fail_register_read;
+
+static bool speaker_off(void) {
+    return (dac_mute & 0x60) == 0x60 && (dac_power & 0x02) != 0;
+}
 esp_err_t bsp_i2c_init(void) { return ESP_OK; }
 void *bsp_i2c_bus(void) { return &token; }
 const audio_codec_ctrl_if_t *audio_codec_new_i2c_ctrl(const audio_codec_i2c_cfg_t *c) { (void)c; return &token; }
@@ -26,6 +32,9 @@ esp_err_t i2s_channel_enable(i2s_chan_handle_t c) {
 }
 esp_err_t i2s_channel_disable(i2s_chan_handle_t c) {
     assert(*c == 1 && locks == 1);
+    // The board's amplifier is always on: attenuation alone cannot protect
+    // the speaker when its DAC loses the shared I2S clock.
+    if (codec_on) assert(speaker_off());
     if ((c == &tx && fail_stop_tx) || (c == &rx && fail_stop_rx)) return ESP_FAIL;
     *c=0; return ESP_OK;
 }
@@ -37,12 +46,31 @@ esp_err_t esp_pm_lock_release(esp_pm_lock_handle_t l) { (void)l; assert(locks-- 
 int esp_codec_dev_open(esp_codec_dev_handle_t d, esp_codec_dev_sample_info_t *fs) {
     (void)d; assert(locks == 1 && tx && rx); assert(fs->channel_mask == 1);
     ++opens; codec_on=true;
+    dac_power=0x40; dac_mute=0x15; // Unrelated register bits must survive.
     // Model the driver's partial-open failure: I2S and internal flags are live.
     return fail_open ? -1 : 0;
 }
 int esp_codec_dev_close(esp_codec_dev_handle_t d) { (void)d; assert(locks == 1); tx=rx=0; codec_on=false; ++closes; return 0; }
 int esp_codec_dev_set_in_gain(esp_codec_dev_handle_t d, float gain) { (void)d; assert(gain == 30.0f); return 0; }
 int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t d, int v) { (void)d; volume=v; return 0; }
+int esp_codec_dev_set_out_mute(esp_codec_dev_handle_t d, bool muted) {
+    (void)d;
+    // The pinned codec wrapper does not propagate an underlying I2C error.
+    if (!fail_mute_write) dac_mute=(dac_mute & ~0x60) | (muted ? 0x60 : 0);
+    return 0;
+}
+int esp_codec_dev_read_reg(esp_codec_dev_handle_t d, int reg, int *value) {
+    (void)d;
+    if (fail_register_read) return -1;
+    assert(reg == 0x12 || reg == 0x31);
+    *value = reg == 0x12 ? dac_power : dac_mute;
+    return 0;
+}
+int esp_codec_dev_write_reg(esp_codec_dev_handle_t d, int reg, int value) {
+    (void)d; assert(reg == 0x12);
+    if (fail_power_write) return -1;
+    dac_power=value; return 0;
+}
 int esp_codec_dev_read(esp_codec_dev_handle_t d, void *p, int n) {
     (void)d; assert(tx && rx && codec_on && locks == 1);
     if (first_rx_word) {
@@ -57,6 +85,7 @@ int esp_codec_dev_write(esp_codec_dev_handle_t d, void *p, int n) { (void)d; (vo
 static void paused(void) {
     char pcm[8];
     assert(codec_on && !tx && !rx && !locks);
+    assert(speaker_off());
     assert(bsp_audio_read(pcm, sizeof(pcm)) == ESP_ERR_INVALID_STATE);
     assert(bsp_audio_write(pcm, sizeof(pcm)) == ESP_ERR_INVALID_STATE);
     assert(bsp_audio_pause() == ESP_OK);
@@ -75,6 +104,7 @@ int main(void) {
     for (int i=0; i<30; ++i) {
         int old=opens; char pcm[8];
         assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+        assert(speaker_off());
         assert(opens == old+1 && locks == 1);
         assert(bsp_audio_set_format(16000,16,1) == ESP_OK && opens == old+1);
         assert(bsp_audio_read(pcm,sizeof(pcm)) == ESP_OK);
@@ -83,6 +113,35 @@ int main(void) {
     }
     // Standby must resume without resetting codec bias/filter state, while
     // allowing light sleep and rejecting reads of old DMA when paused.
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+    // Boot playback can enable the DAC only while both clocks are running.
+    bsp_audio_set_volume(55);
+    assert(volume == 55 && dac_power == 0x40 && dac_mute == 0x15);
+    bsp_audio_set_volume(0);
+    assert(volume == 0 && speaker_off());
+    assert(dac_power == 0x42 && dac_mute == 0x75);
+    bsp_audio_set_volume(55);
+    assert(bsp_audio_pause() == ESP_OK); paused();
+    bsp_audio_set_volume(55); // Never re-enable an unclocked output.
+    assert(speaker_off());
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK && speaker_off());
+
+    // A false-success mute must not permit clock removal. Both read and
+    // power failures retain the live stream/lock and can be retried.
+    bsp_audio_set_volume(55); fail_mute_write=true;
+    assert(bsp_audio_pause() == ESP_FAIL && tx && rx && locks == 1);
+    fail_mute_write=false;
+    assert(bsp_audio_pause() == ESP_OK); paused();
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+    bsp_audio_set_volume(55); fail_power_write=true;
+    assert(bsp_audio_pause() == ESP_FAIL && tx && rx && locks == 1);
+    fail_power_write=false;
+    assert(bsp_audio_pause() == ESP_OK); paused();
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+    fail_register_read=true;
+    assert(bsp_audio_pause() == ESP_FAIL && tx && rx && locks == 1);
+    fail_register_read=false;
+    assert(bsp_audio_pause() == ESP_OK); paused();
     assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
     int warm_opens=opens, warm_closes=closes;
     for (int i=0; i<30; ++i) {

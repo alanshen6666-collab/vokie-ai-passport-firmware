@@ -126,6 +126,47 @@ esp_err_t bsp_audio_init(void) {
 
 // All lifecycle calls are serialized by the audio worker. Track each channel
 // separately so a partial pause/resume can be retried without double release.
+// ES8311's pinned driver uses REG31[6:5] for DAC mute and REG12[1] for
+// DAC power-down (es8311_start/suspend). Leave ADC bias and clocks untouched.
+#define ES8311_OUTPUT_POWER_REG 0x12
+#define ES8311_OUTPUT_POWER_DOWN 0x02
+#define ES8311_OUTPUT_MUTE_REG 0x31
+#define ES8311_OUTPUT_MUTE_MASK 0x60
+
+static esp_err_t output_mute(bool muted) {
+    int value;
+    // esp_codec_dev's mute wrapper discards the driver's I2C error. Verify
+    // the hardware register, not its cached mute flag, before stopping DMA.
+    if (esp_codec_dev_set_out_mute(s_dev, muted) != 0 ||
+        esp_codec_dev_read_reg(s_dev, ES8311_OUTPUT_MUTE_REG, &value) != 0 ||
+        (value & ES8311_OUTPUT_MUTE_MASK) !=
+            (muted ? ES8311_OUTPUT_MUTE_MASK : 0)) return ESP_FAIL;
+    return ESP_OK;
+}
+
+static esp_err_t output_power(bool enabled) {
+    int value, actual;
+    if (esp_codec_dev_read_reg(s_dev, ES8311_OUTPUT_POWER_REG, &value) != 0)
+        return ESP_FAIL;
+    int desired = enabled ? value & ~ES8311_OUTPUT_POWER_DOWN
+                          : value | ES8311_OUTPUT_POWER_DOWN;
+    if (desired != value &&
+        esp_codec_dev_write_reg(s_dev, ES8311_OUTPUT_POWER_REG, desired) != 0)
+        return ESP_FAIL;
+    if (esp_codec_dev_read_reg(s_dev, ES8311_OUTPUT_POWER_REG, &actual) != 0 ||
+        actual != desired) return ESP_FAIL;
+    return ESP_OK;
+}
+
+static esp_err_t output_disable(void) {
+    // Volume 0 is only attenuation. With the always-on amplifier, the DAC
+    // must also be muted and powered down before its I2S clock disappears.
+    esp_err_t mute_err = output_mute(true);
+    esp_err_t power_err = output_power(false);
+    esp_codec_dev_set_out_vol(s_dev, 0);
+    return mute_err != ESP_OK ? mute_err : power_err;
+}
+
 static esp_err_t stream_start(void) {
     esp_err_t err;
 #if CONFIG_PM_ENABLE
@@ -159,7 +200,10 @@ failed:
 }
 
 esp_err_t bsp_audio_pause(void) {
-    if (s_opened) esp_codec_dev_set_out_vol(s_dev, 0);
+    if (s_opened) {
+        esp_err_t err = output_disable();
+        if (err != ESP_OK) return err;
+    }
     if (s_rx_running) {
         esp_err_t err = i2s_channel_disable(s_rx);
         if (err != ESP_OK) return err;
@@ -183,7 +227,8 @@ esp_err_t bsp_audio_suspend(void) {
     // its channels before close, which disables both through the data driver.
     esp_err_t err = stream_start();
     if (err != ESP_OK) return err;
-    esp_codec_dev_set_out_vol(s_dev, 0);
+    err = output_disable();
+    if (err != ESP_OK) return err;
     if (esp_codec_dev_close(s_dev) != 0) return ESP_FAIL;
     s_opened = false;
     s_tx_running = s_rx_running = false;
@@ -195,6 +240,10 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     if (s_opened && s_hz == hz && s_bits == bits && s_ch == ch) {
         // I2S enable resets the RX queue and the descriptor read position.
         // Preserve codec bias/filter state; do not replay its startup transient.
+        if (!s_tx_running || !s_rx_running) {
+            esp_err_t err = output_disable();
+            if (err != ESP_OK) return err;
+        }
         return stream_start();
     }
 
@@ -223,6 +272,10 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     // derives them from sample rate and MCLK. Preserve mono microphone gain.
     esp_codec_dev_set_in_gain(s_dev, 30.0f);
     s_opened = true; s_hz = hz; s_bits = bits; s_ch = ch;
+    // Opening the duplex codec enables its DAC. Capture and idle must stay
+    // silent; only an explicit nonzero playback volume may re-enable it.
+    err = output_disable();
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "codec 打开 %luHz/%ubit/%uch", (unsigned long)hz, bits, ch);
     return ESP_OK;
 }
@@ -247,5 +300,17 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
 }
 
 void bsp_audio_set_volume(uint8_t percent) {
-    if (s_dev) esp_codec_dev_set_out_vol(s_dev, percent);
+    if (!s_dev || !s_opened) return;
+    esp_err_t err;
+    if (!percent) {
+        err = output_disable();
+    } else {
+        // Do not energize a DAC whose clocks have been paused.
+        if (!s_tx_running || !s_rx_running) return;
+        err = esp_codec_dev_set_out_vol(s_dev, percent) == 0 ? ESP_OK : ESP_FAIL;
+        if (err == ESP_OK) err = output_power(true);
+        if (err == ESP_OK) err = output_mute(false);
+        if (err != ESP_OK) (void)output_disable();
+    }
+    if (err != ESP_OK) ESP_LOGE(TAG, "Speaker output transition failed");
 }

@@ -16,8 +16,9 @@ esp_err_t bsp_audio_init(void);
 //   音调和速度都快一倍。故本函数在格式变化时先 close 再 open。
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch);
 
-// Pause I2S/DMA and release its sleep lock while retaining codec bias and
-// filter state. set_format() resumes fresh DMA without a cold ADC restart.
+// Mute/power down the DAC, then pause I2S/DMA and release its sleep lock
+// while retaining microphone bias and filter state. set_format() resumes fresh
+// DMA without a cold ADC restart.
 // Idempotent; blocking, audio-worker context only, serialized with all PCM I/O.
 // Does not power down the codec: residual analog current must be measured.
 esp_err_t bsp_audio_pause(void);
@@ -33,5 +34,7 @@ esp_err_t bsp_audio_suspend(void);
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes);
 esp_err_t bsp_audio_read(void *pcm, size_t bytes);
 
-// 输出音量 0..100(%)。
+// Output volume 0..100(%), serialized on the audio worker. Zero also mutes
+// and powers down the DAC without resetting the microphone. Nonzero volume
+// enables playback only with a running stream; open/resume starts silent.
 void bsp_audio_set_volume(uint8_t percent);

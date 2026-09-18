@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- Execute short button actions on debounced release instead of waiting for double-click classification. Consecutive taps remain separate actions; OK keeps its 650 ms long-press clear/cancel behavior even after a quick tap, without deleting again on release.
+
 - Protect the native USB Serial/JTAG console with a no-light-sleep lock and an 80 MHz APB-frequency floor while the bus is active. Poll every two seconds with a five-second release grace for brief SOF gaps. A long-silent or unplugged bus permits battery standby again. Host suspend/replug behavior remains a hardware acceptance item; the cause of the earlier isolated disconnect is unconfirmed.
 
 - Avoid repeated clipping at recording start by retaining ES8311 bias/filter state during standby and pausing I2S/DMA instead of fully restarting the codec. Resume fresh DMA and prime one partial I2S slot word (62.5 us at 16 kHz) before returning the full PCM frame, preventing a startup spike from seeding ADPCM. Pause/resume failures retain necessary power locks and support retry instead of aborting the firmware; retained analog current remains unmeasured.

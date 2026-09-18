@@ -59,6 +59,9 @@ run_static_checks() {
         tests/test_lvgl_power.c components/bsp/src/bsp_display_lvgl.c \
         -o "${test_dir}/test_lvgl_power"
     "${test_dir}/test_lvgl_power"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_button_gesture.c -o "${test_dir}/test_button_gesture"
+    "${test_dir}/test_button_gesture"
     python3 tests/test_verify_firmware.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
@@ -89,6 +92,7 @@ required = {
     "CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y",
     "CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP=y", "CONFIG_ESP_PHY_MAC_BB_PD=y",
     "CONFIG_BUTTON_PERIOD_TIME_MS=20", "CONFIG_BUTTON_DEBOUNCE_TICKS=1",
+    "CONFIG_BUTTON_LONG_PRESS_TIME_MS=650",
 }
 missing = required - config
 if missing:

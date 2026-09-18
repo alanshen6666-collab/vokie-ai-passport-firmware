@@ -160,7 +160,7 @@ LVGL 非线程安全：
 - ADC 衰减为 `ADC_ATTEN_DB_12`，必须与依赖的 button 组件内部配置保持一致。升级组件后要重新核对。
 - ADC 校准句柄创建失败不影响按键事件，但 `bsp_button_read_mv()` 返回 `-1`。
 - 回调来自 button 组件的定时器任务，不能阻塞、录音、播放或直接做重 UI 操作。
-- 事件包括 PRESS、CLICK、DOUBLE、LONG。Vokie 应用主要消费 CLICK；OK 的 LONG/CLICK 由录音和编辑状态共同处理。
+- 事件包括去抖后的 PRESS、RELEASE 及保留的 CLICK、DOUBLE、LONG。Vokie 在 RELEASE 触发短按，忽略延后的 CLICK/DOUBLE；OK 在 ESP_TIMER_TASK 使用独立 650 ms 长按计时，确保快按后再长按仍有效。长按松手不再触发删除。
 
 重标阈值时，逐个长按按键记录稳定电压，采集多块板、不同电量和合理温度范围的数据，再把相邻分布之间留裕量设置为边界。不要只用理论分压值。
 

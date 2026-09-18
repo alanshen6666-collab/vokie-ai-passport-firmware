@@ -1,16 +1,9 @@
 // main/usb_standby.c
-// The ESP32-C3 USB Serial/JTAG peripheral cannot survive light sleep, and its
-// PHY loses its BBPLL-derived clock when dynamic frequency scaling reaches
-// the 40 MHz floor. IDF's built-in connection monitor
-// (CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION) releases its locks after only ~4 ms
-// without SOF, so a short host-side interruption — for example another
-// application probing the serial port — cascaded into a permanently dead
-// console: the lock dropped, scaling removed BBPLL, and the PHY could never
-// see SOF again. This module adds hysteresis on top of the monitor: while the
-// bus is active it holds a no-light-sleep lock plus an 80 MHz APB floor, so a
-// transient SOF gap self-heals instead of killing the port. A bus that stays
-// silent for the release grace is treated as unplugged and battery standby is
-// permitted again; replugging after a genuine host suspend restores it.
+// ESP32-C3 USB Serial/JTAG needs its PHY clock and cannot survive light sleep.
+// Add a five-second grace period above IDF's fast connection monitor so brief
+// SOF gaps retain NO_LIGHT_SLEEP and the APB frequency floor. This protects
+// against clock loss; it does not establish the cause of an observed host-side
+// disconnect. A long-silent bus releases the locks for battery standby.
 #include "usb_standby.h"
 
 #include "driver/usb_serial_jtag.h"

@@ -16,10 +16,19 @@ esp_err_t bsp_audio_init(void);
 //   音调和速度都快一倍。故本函数在格式变化时先 close 再 open。
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch);
 
-// Close codec/I2S until set_format() reopens it (including the same format).
+// Pause I2S/DMA and release its sleep lock while retaining codec bias and
+// filter state. set_format() resumes fresh DMA without a cold ADC restart.
+// Idempotent; blocking, audio-worker context only, serialized with all PCM I/O.
+// Does not power down the codec: residual analog current must be measured.
+esp_err_t bsp_audio_pause(void);
+
+// Fully close codec/I2S until set_format() reopens it (including the same format).
+// Use for teardown or format changes; recording idle should use pause().
 // Idempotent. The audio worker must serialize this with all PCM I/O.
 esp_err_t bsp_audio_suspend(void);
 
+// The first mono 16-bit read after I2S restart primes one partial slot word
+// (62.5 us at 16 kHz), then returns the full requested PCM frame.
 // 播放 / 录音。bytes 为字节数(16bit 单声道时 = 采样数 x 2)。
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes);
 esp_err_t bsp_audio_read(void *pcm, size_t bytes);

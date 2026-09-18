@@ -9,7 +9,7 @@
 | Stage       | Depends on     | Files / owner                                                               | Acceptance                                                   |
 | ----------- | -------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | Contract    | None           | These three document pairs / primary agent                                  | Interfaces and limitations recorded                          |
-| Audio       | Contract       | BSP audio and BLE audio worker / primary agent                              | Idle shutdown, repeated reopen and failed-open cleanup tests |
+| Audio       | Contract       | BSP audio and BLE audio worker / primary agent                              | I2S pause/resume, retained codec state, failed-transition cleanup tests |
 | Display     | Contract       | BSP display/LVGL, UI worker, idle policy / primary agent                    | Timing, duplicate states, pause/resume and wake tests        |
 | Integration | Audio, Display | PM defaults, main startup, CMake, validation, documentation / primary agent | Complete repository gate and firmware image verification     |
 | Device      | Integration    | Physical board and current meter / user-assisted                            | Battery-side current, BLE, audio, all buttons, USB console survival |

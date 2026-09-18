@@ -197,16 +197,16 @@ static void audio_task(void *arg)
         if (!s_recording) {
             capturing = false;
             sequence = 0;
-            // A failed close keeps the stream marked open and its sleep lock
+            // A failed pause keeps the affected I2S channel and its sleep lock
             // held; retry after a short pause instead of aborting the device.
             // A capture request that arrives during the retry is picked up by
             // the loop condition, so no notification is lost.
-            if (bsp_audio_suspend() != ESP_OK) {
-                ESP_LOGE(TAG, "Codec close failed; retrying");
+            if (bsp_audio_pause() != ESP_OK) {
+                ESP_LOGE(TAG, "I2S pause failed; retrying");
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
-            // A request during suspend leaves a pending notification. Do not
+            // A request during pause leaves a pending notification. Do not
             // clear notifications separately from this atomic wait.
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
@@ -214,13 +214,13 @@ static void audio_task(void *arg)
         if (!capturing || capture_session != s_session) {
             capture_session = s_session;
             sequence = 0;
-            // A failed close before a reopen reports the error and returns to
+            // Pause also resets DMA between sessions; a failure returns to
             // idle so the next press can retry instead of rebooting.
-            if (bsp_audio_suspend() != ESP_OK) {
+            if (bsp_audio_pause() != ESP_OK) {
                 if (s_recording && capture_session == s_session) {
                     s_recording = false;
                     s_stop_requested = false;
-                    send_error(capture_session, "audio_close");
+                    send_error(capture_session, "audio_pause");
                     ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
                 }
                 continue;

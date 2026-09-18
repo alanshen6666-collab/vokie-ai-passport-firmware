@@ -6,11 +6,11 @@
 
 ## Unreleased
 
-- Keep the native USB Serial/JTAG console usable while automatic light sleep is enabled. The bus state is polled every two seconds with a five-second release grace, and while a host keeps it active the firmware holds both a no-light-sleep lock and an 80 MHz APB-frequency floor, so short host-side bus interruptions (for example another application probing the serial port) no longer drop the console lock and permanently disable the port. A bus that stays silent or unplugged for five seconds still permits battery light sleep; a console lost after a genuine host suspend recovers by replugging.
+- Protect the native USB Serial/JTAG console with a no-light-sleep lock and an 80 MHz APB-frequency floor while the bus is active. Poll every two seconds with a five-second release grace for brief SOF gaps. A long-silent or unplugged bus permits battery standby again. Host suspend/replug behavior remains a hardware acceptance item; the cause of the earlier isolated disconnect is unconfirmed.
 
-- Audio close failures in the voice worker now retry or report a device error and return to idle instead of aborting the firmware.
+- Avoid repeated clipping at recording start by retaining ES8311 bias/filter state during standby and pausing I2S/DMA instead of fully restarting the codec. Resume fresh DMA and prime one partial I2S slot word (62.5 us at 16 kHz) before returning the full PCM frame, preventing a startup spike from seeding ADPCM. Pause/resume failures retain necessary power locks and support retry instead of aborting the firmware; retained analog current remains unmeasured.
 
-- Reduced screen-off standby activity: close idle ES8311/I2S streams, wait for recording events, pause LVGL ticks/refresh/animations while off, and enable dynamic frequency scaling plus automatic light sleep with BLE modem sleep. ADC keys use 20 ms scanning; duplicate host states no longer restart the display timeout. Actual current savings and wake/audio behavior still require board measurements.
+- Reduced screen-off standby activity: pause idle I2S streams, wait for recording events, pause LVGL ticks/refresh/animations while off, and enable dynamic frequency scaling plus automatic light sleep with BLE modem sleep. ADC keys use 20 ms scanning; duplicate host states no longer restart the display timeout. Actual current savings and wake/audio behavior still require board measurements.
 
 - Added the two-second Vokie startup sound at moderate volume. It plays once per boot on the audio worker, yields to voice capture, and mutes and clears startup microphone samples before recording.
 

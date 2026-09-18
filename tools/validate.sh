@@ -46,6 +46,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ui_idle.c -o "${test_dir}/test_ui_idle"
     "${test_dir}/test_ui_idle"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_usb_standby.c -o "${test_dir}/test_usb_standby"
+    "${test_dir}/test_usb_standby"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DCONFIG_PM_ENABLE=1 \
         -Itests/power_stubs -Itests/battery_stubs -Icomponents/bsp/include \
         tests/test_bsp_audio_power.c components/bsp/src/bsp_audio.c \

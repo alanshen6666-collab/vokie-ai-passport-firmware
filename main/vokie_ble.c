@@ -197,7 +197,15 @@ static void audio_task(void *arg)
         if (!s_recording) {
             capturing = false;
             sequence = 0;
-            ESP_ERROR_CHECK(bsp_audio_suspend());
+            // A failed close keeps the stream marked open and its sleep lock
+            // held; retry after a short pause instead of aborting the device.
+            // A capture request that arrives during the retry is picked up by
+            // the loop condition, so no notification is lost.
+            if (bsp_audio_suspend() != ESP_OK) {
+                ESP_LOGE(TAG, "Codec close failed; retrying");
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
             // A request during suspend leaves a pending notification. Do not
             // clear notifications separately from this atomic wait.
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -206,7 +214,17 @@ static void audio_task(void *arg)
         if (!capturing || capture_session != s_session) {
             capture_session = s_session;
             sequence = 0;
-            ESP_ERROR_CHECK(bsp_audio_suspend());
+            // A failed close before a reopen reports the error and returns to
+            // idle so the next press can retry instead of rebooting.
+            if (bsp_audio_suspend() != ESP_OK) {
+                if (s_recording && capture_session == s_session) {
+                    s_recording = false;
+                    s_stop_requested = false;
+                    send_error(capture_session, "audio_close");
+                    ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+                }
+                continue;
+            }
             if (bsp_audio_set_format(16000, 16, 1) != ESP_OK) {
                 if (s_recording && capture_session == s_session) {
                     s_recording = false;

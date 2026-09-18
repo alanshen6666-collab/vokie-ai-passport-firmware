@@ -16,4 +16,4 @@ UI producers update a protected state snapshot and notify the worker; only that 
 
 BLE V1, ADPCM framing, 16 kHz capture, boot sound priority, ADC key mapping, partitions and Recovery remain unchanged. Task notifications supplement state checks so an event arriving during audio shutdown cannot be lost. A failed audio start reports an error and returns to idle. Pausing LVGL must be reversible and checked for errors. All PM locks are balanced across repeated transitions.
 
-USB connection monitoring holds a no-light-sleep lock while native USB Serial/JTAG is attached; unplugging permits battery standby again. This prevents console loss during startup and screen-off.
+USB standby polling (`main/usb_standby.c`) holds a no-light-sleep lock plus an 80 MHz APB-frequency floor while the native USB Serial/JTAG bus is active, with a five-second release grace for short host-side interruptions; an unplugged or long-suspended bus permits battery standby again. A failed audio close retries or reports an error and returns to idle; it must not abort the device. A console lost after a genuine host suspend requires replugging.

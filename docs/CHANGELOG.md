@@ -6,7 +6,9 @@
 
 ## Unreleased
 
-- Keep native USB Serial/JTAG connected while automatic light sleep is enabled: inhibit light sleep while USB is attached, and permit it again after unplugging. This prevents the ESP32-C3 console from disappearing during startup or screen-off.
+- Keep the native USB Serial/JTAG console usable while automatic light sleep is enabled. The bus state is polled every two seconds with a five-second release grace, and while a host keeps it active the firmware holds both a no-light-sleep lock and an 80 MHz APB-frequency floor, so short host-side bus interruptions (for example another application probing the serial port) no longer drop the console lock and permanently disable the port. A bus that stays silent or unplugged for five seconds still permits battery light sleep; a console lost after a genuine host suspend recovers by replugging.
+
+- Audio close failures in the voice worker now retry or report a device error and return to idle instead of aborting the firmware.
 
 - Reduced screen-off standby activity: close idle ES8311/I2S streams, wait for recording events, pause LVGL ticks/refresh/animations while off, and enable dynamic frequency scaling plus automatic light sleep with BLE modem sleep. ADC keys use 20 ms scanning; duplicate host states no longer restart the display timeout. Actual current savings and wake/audio behavior still require board measurements.
 

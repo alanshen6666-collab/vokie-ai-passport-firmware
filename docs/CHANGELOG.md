@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- Explicitly mute and power down the speaker DAC before pausing its clocks, while keeping microphone bias/filter state. A zero playback volume now disables the output; only deliberate playback can re-enable it with a running stream. Verify output registers and keep the stream awake for retry if the transition fails. This addresses an unsafe idle-output path identified while investigating intermittent post-flash noise; acoustic reproduction remains a device check.
+
 - Execute short button actions on debounced release instead of waiting for double-click classification. Consecutive taps remain separate actions; OK keeps its 650 ms long-press clear/cancel behavior even after a quick tap, without deleting again on release.
 
 - Protect the native USB Serial/JTAG console with a no-light-sleep lock and an 80 MHz APB-frequency floor while the bus is active. Poll every two seconds with a five-second release grace for brief SOF gaps. A long-silent or unplugged bus permits battery standby again. Host suspend/replug behavior remains a hardware acceptance item; the cause of the earlier isolated disconnect is unconfirmed.

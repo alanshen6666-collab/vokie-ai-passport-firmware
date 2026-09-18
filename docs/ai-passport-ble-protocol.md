@@ -75,6 +75,8 @@ The host keeps a request active through capture, ASR, post-processing, return,
 and paste, until it receives a terminal `session_state`. The firmware recognizes
 an `OK` long press at 650 ms.
 
+Short clicks are emitted on debounced key release, without waiting for the driver's 180 ms double-click window. Rapid consecutive taps are separate actions. Delayed single/double-click callbacks are ignored by Vokie. OK uses an independent 650 ms hold timer, including when held immediately after a short tap; releasing after a long action does not also delete a character. Presses that started before the host handshake or on another connection do not produce an action.
+
 ## Audio fragment envelope
 
 Every Audio notification contains one complete fragment. Multi-fragment frames

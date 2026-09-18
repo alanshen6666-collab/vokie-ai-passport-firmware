@@ -8,6 +8,7 @@
 #include "es8311_codec.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 
 static const char *TAG = "bsp_audio";
 
@@ -17,6 +18,11 @@ static i2s_chan_handle_t      s_tx, s_rx;
 static uint32_t s_hz;
 static uint8_t  s_bits, s_ch;
 static bool     s_opened;
+static bool     s_tx_running, s_rx_running, s_lock_held;
+static bool     s_rx_needs_prime;
+#if CONFIG_PM_ENABLE
+static esp_pm_lock_handle_t s_sleep_lock;
+#endif
 
 static esp_err_t i2s_full_duplex_init(void) {
     i2s_chan_config_t chan = {
@@ -63,11 +69,7 @@ static esp_err_t i2s_full_duplex_init(void) {
     if ((e = i2s_channel_init_std_mode(s_rx, &std)) != ESP_OK) {
         ESP_LOGE(TAG, "i2s rx 初始化失败: %s", esp_err_to_name(e)); return e;
     }
-    // esp_codec_dev_open 内部重配前会先 i2s_channel_disable,而 disable 要求通道处于
-    // RUNNING;刚 init 的通道是 READY,会打一条 "channel has not been enabled yet" 错误日志。
-    // 这里先 enable 一次让那次 disable 合法(此时 codec 未配,不出声)。
-    i2s_channel_enable(s_tx);
-    i2s_channel_enable(s_rx);
+    // Leave both channels stopped until set_format() opens the codec.
     return ESP_OK;
 }
 
@@ -122,46 +124,125 @@ esp_err_t bsp_audio_init(void) {
     return ESP_OK;
 }
 
+// All lifecycle calls are serialized by the audio worker. Track each channel
+// separately so a partial pause/resume can be retried without double release.
+static esp_err_t stream_start(void) {
+    esp_err_t err;
+#if CONFIG_PM_ENABLE
+    if (!s_sleep_lock) {
+        err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "audio", &s_sleep_lock);
+        if (err != ESP_OK) return err;
+    }
+    if (!s_lock_held) {
+        err = esp_pm_lock_acquire(s_sleep_lock);
+        if (err != ESP_OK) return err;
+    }
+#endif
+    s_lock_held = true;
+    if (!s_tx_running) {
+        err = i2s_channel_enable(s_tx);
+        if (err != ESP_OK) goto failed;
+        s_tx_running = true;
+    }
+    if (!s_rx_running) {
+        err = i2s_channel_enable(s_rx);
+        if (err != ESP_OK) goto failed;
+        s_rx_running = true;
+        s_rx_needs_prime = true;
+    }
+    return ESP_OK;
+failed:
+    // pause retains the lock if a channel cannot be stopped. A later call
+    // retries that channel; a live peripheral must never lose its sleep lock.
+    (void)bsp_audio_pause();
+    return err;
+}
+
+esp_err_t bsp_audio_pause(void) {
+    if (s_opened) esp_codec_dev_set_out_vol(s_dev, 0);
+    if (s_rx_running) {
+        esp_err_t err = i2s_channel_disable(s_rx);
+        if (err != ESP_OK) return err;
+        s_rx_running = false;
+    }
+    if (s_tx_running) {
+        esp_err_t err = i2s_channel_disable(s_tx);
+        if (err != ESP_OK) return err;
+        s_tx_running = false;
+    }
+#if CONFIG_PM_ENABLE
+    if (s_lock_held) ESP_ERROR_CHECK(esp_pm_lock_release(s_sleep_lock));
+#endif
+    s_lock_held = false;
+    return ESP_OK;
+}
+
+esp_err_t bsp_audio_suspend(void) {
+    if (!s_opened) return bsp_audio_pause();
+    // esp_codec_dev still owns an open duplex stream while paused. Restore
+    // its channels before close, which disables both through the data driver.
+    esp_err_t err = stream_start();
+    if (err != ESP_OK) return err;
+    esp_codec_dev_set_out_vol(s_dev, 0);
+    if (esp_codec_dev_close(s_dev) != 0) return ESP_FAIL;
+    s_opened = false;
+    s_tx_running = s_rx_running = false;
+    return bsp_audio_pause();
+}
+
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     if (!s_dev) return ESP_ERR_INVALID_STATE;
-    if (s_opened && s_hz == hz && s_bits == bits && s_ch == ch) return ESP_OK;   // 同格式复用
-
-    if (s_opened) {
-        esp_codec_dev_close(s_dev);
-        s_opened = false;
-        // close 把 I2S 通道退回 READY,而接下来的 open 内部又会 disable 一次 →
-        // 会打 "channel has not been enabled yet"。补一次 enable 让它合法。
-        if (s_tx) i2s_channel_enable(s_tx);
-        if (s_rx) i2s_channel_enable(s_rx);
+    if (s_opened && s_hz == hz && s_bits == bits && s_ch == ch) {
+        // I2S enable resets the RX queue and the descriptor read position.
+        // Preserve codec bias/filter state; do not replay its startup transient.
+        return stream_start();
     }
 
+    esp_err_t err = bsp_audio_suspend();
+    if (err != ESP_OK) return err;
+    err = stream_start();
+    if (err != ESP_OK) return err;
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = bits,
         .channel = ch,
         .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
         .sample_rate = hz,
-        .mclk_multiple = 0,          // 0 → 驱动按默认 256xfs 取 MCLK
+        .mclk_multiple = 0,
     };
     int r = esp_codec_dev_open(s_dev, &fs);
-    if (r != 0) { ESP_LOGE(TAG, "esp_codec_dev_open 失败: %d", r); return ESP_FAIL; }
+    if (r != 0) {
+        ESP_LOGE(TAG, "esp_codec_dev_open 失败: %d", r);
+        // open can fail after enabling DMA or setting its internal open flags.
+        esp_codec_dev_close(s_dev);
+        s_tx_running = s_rx_running = false;
+        (void)bsp_audio_pause();
+        return ESP_FAIL;
+    }
 
-    // ⚠ open 之后【不要】手动覆写 ES8311 的时钟分频寄存器(REG01~06):
-    //   驱动已按采样率与 MCLK 精确算好,覆写会导致 ADC/DAC 时序错乱、录音回放全是杂音。
-    //   这里只设麦克风模拟 PGA 增益。
+    // Do not overwrite ES8311 clock dividers after open. The codec driver
+    // derives them from sample rate and MCLK. Preserve mono microphone gain.
     esp_codec_dev_set_in_gain(s_dev, 30.0f);
-
     s_opened = true; s_hz = hz; s_bits = bits; s_ch = ch;
     ESP_LOGI(TAG, "codec 打开 %luHz/%ubit/%uch", (unsigned long)hz, bits, ch);
     return ESP_OK;
 }
 
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes) {
-    if (!s_dev) return ESP_ERR_INVALID_STATE;
+    if (!s_dev || !s_opened || !s_tx_running || !s_rx_running) return ESP_ERR_INVALID_STATE;
     return esp_codec_dev_write(s_dev, (void *)pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
-    if (!s_dev) return ESP_ERR_INVALID_STATE;
+    if (!s_dev || !s_opened || !s_tx_running || !s_rx_running) return ESP_ERR_INVALID_STATE;
+    // On this C3's 16-bit mono I2S path, the first word after DMA restart can
+    // contain a partial slot. Do not seed the ADPCM predictor with that word.
+    // Prime once (one sample = 62.5 us at 16 kHz), retaining the full requested
+    // frame and all following samples. No codec settling frames are dropped.
+    if (s_rx_needs_prime && s_bits == 16 && s_ch == 1 && bytes) {
+        int16_t partial_slot;
+        if (esp_codec_dev_read(s_dev, &partial_slot, sizeof(partial_slot)) != 0) return ESP_FAIL;
+        s_rx_needs_prime = false;
+    }
     return esp_codec_dev_read(s_dev, pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 

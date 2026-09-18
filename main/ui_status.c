@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "ui_battery.h"
+#include "ui_idle.h"
 #include "vokie_symbol_asset.h"
 #include "vokie_title_font.h"
 #include <stdio.h>
@@ -39,18 +40,12 @@
 #define UI_LOGO_Y 132
 #define UI_STATE_Y 53
 #define UI_DETAIL_Y 86
-#define UI_BRIGHTNESS_FULL 65
-#define UI_BRIGHTNESS_PROCESSING 38
-#define UI_BRIGHTNESS_DIM 18
-#define UI_HINT_TIMEOUT_US (3LL * 1000LL * 1000LL)
 #define UI_HINT_FADE_IN_MS 160
 #define UI_HINT_FADE_OUT_MS 220
 #define UI_HINT_GROUP_X 178
 #define UI_HINT_GROUP_Y 126
 #define UI_HINT_GROUP_W 42
 #define UI_HINT_ROW_H 22
-#define UI_DIM_TIMEOUT_US (3LL * 1000LL * 1000LL)
-#define UI_OFF_TIMEOUT_US (20LL * 1000LL * 1000LL)
 #define UI_BATTERY_POLL_US (30LL * 1000LL * 1000LL)
 
 static lv_obj_t *s_screen;
@@ -61,17 +56,11 @@ static lv_obj_t *s_hint_panel;
 static lv_obj_t *s_hint_lines[3];
 static lv_obj_t *s_hint_labels[3];
 static lv_obj_t *s_battery;
-static volatile int64_t s_last_touch_us;
-static volatile bool s_active;
-static volatile bool s_dirty;
-static volatile ui_status_hint_t s_hints_requested;
-static volatile bool s_hints_from_key;
-static volatile int64_t s_hints_deadline_us;
+static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
+static ui_idle_t s_idle;
 static uint8_t s_backlight_level;
 static bool s_hints_visible;
 static ui_status_hint_t s_displayed_hints;
-static ui_status_state_t s_state_value;
-static char s_message[96];
 static TaskHandle_t s_task;
 
 // LVGL retains these arrays. Startup keeps all three original guide paths;
@@ -121,12 +110,6 @@ static void set_backlight(uint8_t percent)
     if (percent == s_backlight_level) return;
     s_backlight_level = percent;
     bsp_display_backlight(percent);
-}
-
-static uint8_t active_brightness(void)
-{
-    return s_state_value == UI_STATUS_PROCESSING ? UI_BRIGHTNESS_PROCESSING
-                                                  : UI_BRIGHTNESS_FULL;
 }
 
 static const char *state_name(ui_status_state_t state)
@@ -257,80 +240,102 @@ static void set_button_hints_visible(ui_status_hint_t hints)
     }
 }
 
-static void render_state(void)
+// Called only by initialization / the status worker with the LVGL lock held.
+static void render_state(const ui_idle_t *state, ui_status_hint_t hints)
 {
-    if (!s_screen || !bsp_lvgl_lock(500)) return;
-    const uint32_t color = state_color(s_state_value);
-    lv_label_set_text(s_state, state_name(s_state_value));
+    const uint32_t color = state_color(state->state);
+    lv_label_set_text(s_state, state_name(state->state));
     lv_obj_set_style_text_color(s_state, lv_color_hex(color), 0);
-    lv_label_set_text(s_detail, s_message[0] ? s_message : "Vokie is ready");
-    set_button_hints_visible(s_hints_requested);
+    lv_label_set_text(s_detail, state->message[0] ? state->message : "Vokie is ready");
+    set_button_hints_visible(hints);
     lv_obj_set_style_opa(s_screen, LV_OPA_COVER, 0);
-    set_backlight(active_brightness());
-    bsp_lvgl_unlock();
+}
+
+static ui_idle_t snapshot(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    const ui_idle_t state = s_idle;
+    taskEXIT_CRITICAL(&s_state_lock);
+    return state;
 }
 
 static void status_task(void *arg)
 {
     (void)arg;
     int64_t next_battery_us = 0;
-    int battery_soc = -1;
-    int battery_mv = -1;
+    int battery_soc = -1, battery_mv = -1;
     bool battery_dirty = true;
+    uint32_t rendered_revision = 0;
+    ui_status_hint_t rendered_hints = UI_STATUS_HINT_NONE;
     for (;;) {
-        if (s_dirty) {
-            s_dirty = false;
-            render_state();
-        }
+        const ui_idle_t state = snapshot();
         const int64_t now_us = esp_timer_get_time();
+        const uint8_t brightness = ui_idle_brightness(&state, now_us);
+        const ui_status_hint_t hints = ui_idle_hints(&state, now_us);
+        bool retry = false;
+        if (bsp_lvgl_lock(100)) {
+            if (brightness) {
+                set_backlight(brightness);
+                ESP_ERROR_CHECK(bsp_lvgl_set_paused(false));
+                if (state.revision != rendered_revision || hints != rendered_hints) {
+                    render_state(&state, hints);
+                    rendered_revision = state.revision;
+                    rendered_hints = hints;
+                }
+            } else {
+                ESP_ERROR_CHECK(bsp_lvgl_set_paused(true));
+                set_backlight(0);
+            }
+            bsp_lvgl_unlock();
+        } else {
+            retry = true;
+        }
+
         if (now_us >= next_battery_us) {
-            // I2C may block for 100 ms. Keep it in this worker, outside the
-            // LVGL lock and button callbacks, and retry failed reads next time.
+            // I2C stays outside the LVGL lock. Sampling while off does not
+            // invalidate objects, restart animations or resume the LVGL tick.
             battery_soc = bsp_battery_soc();
             battery_mv = bsp_battery_mv();
             battery_dirty = true;
             next_battery_us = esp_timer_get_time() + UI_BATTERY_POLL_US;
         }
-        if (battery_dirty && bsp_lvgl_lock(100)) {
-            static const char *const icons[] = {
-                LV_SYMBOL_BATTERY_EMPTY, LV_SYMBOL_BATTERY_1,
-                LV_SYMBOL_BATTERY_2, LV_SYMBOL_BATTERY_3, LV_SYMBOL_BATTERY_FULL,
-            };
-            const ui_battery_view_t view = ui_battery_view(battery_soc, battery_mv);
-            lv_label_set_text_fmt(s_battery, "%s %s", icons[view.bars], view.text);
-            lv_obj_set_style_text_color(s_battery,
-                lv_color_hex(view.low ? UI_RED : UI_BATTERY_MUTED), 0);
-            battery_dirty = false;
-            // Battery refreshes must not wake the screen or reset idle timers.
-            bsp_lvgl_unlock();
-            ESP_LOGI("ui_status", "Battery display: %s (soc=%d, voltage=%dmV)",
-                     view.text, battery_soc, battery_mv);
+        if (brightness && battery_dirty) {
+            if (bsp_lvgl_lock(100)) {
+                static const char *const icons[] = {
+                    LV_SYMBOL_BATTERY_EMPTY, LV_SYMBOL_BATTERY_1,
+                    LV_SYMBOL_BATTERY_2, LV_SYMBOL_BATTERY_3, LV_SYMBOL_BATTERY_FULL,
+                };
+                const ui_battery_view_t view = ui_battery_view(battery_soc, battery_mv);
+                lv_label_set_text_fmt(s_battery, "%s %s", icons[view.bars], view.text);
+                lv_obj_set_style_text_color(s_battery,
+                    lv_color_hex(view.low ? UI_RED : UI_BATTERY_MUTED), 0);
+                battery_dirty = false;
+                bsp_lvgl_unlock();
+            } else {
+                retry = true;
+            }
         }
-        if (s_screen && (!s_active || !s_hints_from_key) && s_hints_requested &&
-            now_us >= s_hints_deadline_us && bsp_lvgl_lock(100)) {
-            s_hints_requested = UI_STATUS_HINT_NONE;
-            set_button_hints_visible(UI_STATUS_HINT_NONE);
-            bsp_lvgl_unlock();
-        }
-        if (s_screen && s_active) {
-            set_backlight(active_brightness());
-        } else if (s_screen && now_us - s_last_touch_us >= UI_OFF_TIMEOUT_US) {
-            set_backlight(0);
-        } else if (s_screen && now_us - s_last_touch_us >= UI_DIM_TIMEOUT_US) {
-            set_backlight(UI_BRIGHTNESS_DIM);
-        }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        const int64_t after_work_us = esp_timer_get_time();
+        int64_t delay_us = ui_idle_wait_us(&state, after_work_us, next_battery_us);
+        // A blocking battery read may cross a dim/off/hint deadline.
+        if (ui_idle_brightness(&state, after_work_us) != brightness ||
+            ui_idle_hints(&state, after_work_us) != hints) delay_us = 0;
+        if (retry && delay_us > 20000) delay_us = 20000;
+        TickType_t ticks = pdMS_TO_TICKS((delay_us + 999) / 1000);
+        // Pending notifications wake immediately, including during I2C work.
+        ulTaskNotifyTake(pdTRUE, ticks ? ticks : 1);
     }
 }
 
 void ui_status_init(void)
 {
     if (s_screen || !bsp_lvgl_lock(1000)) return;
-    s_last_touch_us = esp_timer_get_time();
-    s_hints_deadline_us = s_last_touch_us + UI_HINT_TIMEOUT_US;
-    s_hints_requested = UI_STATUS_HINT_ALL;
-    s_state_value = UI_STATUS_STARTING;
-    s_message[0] = 0;
+    const int64_t now = esp_timer_get_time();
+    s_idle = (ui_idle_t){
+        .state = UI_STATUS_STARTING, .hints = UI_STATUS_HINT_ALL,
+        .last_touch_us = now, .hints_deadline_us = now + UI_HINT_TIMEOUT_US,
+        .revision = 1,
+    };
     s_screen = lv_obj_create(NULL);
     lv_obj_remove_style_all(s_screen);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(UI_BG), 0);
@@ -357,8 +362,9 @@ void ui_status_init(void)
     lv_obj_set_pos(s_detail, UI_CONTENT_X, UI_DETAIL_Y);
 
     lv_screen_load(s_screen);
+    render_state(&s_idle, UI_STATUS_HINT_ALL);
+    set_backlight(ui_idle_brightness(&s_idle, now));
     bsp_lvgl_unlock();
-    render_state();
     // Battery I2C and diagnostic/error logging need additional stack headroom.
     if (xTaskCreate(status_task, "ui_status", 3072, NULL, 2, &s_task) != pdPASS) {
         ESP_LOGE("ui_status", "Failed to start status worker");
@@ -369,29 +375,16 @@ void ui_status_touch(ui_status_hint_t hint)
 {
     if (hint != UI_STATUS_HINT_VOICE && hint != UI_STATUS_HINT_SEND &&
         hint != UI_STATUS_HINT_UNDO && hint != UI_STATUS_HINT_ALL) return;
-    const int64_t now_us = esp_timer_get_time();
-    s_last_touch_us = now_us;
-    s_hints_deadline_us = now_us + UI_HINT_TIMEOUT_US;
-    s_hints_requested = hint;
-    s_hints_from_key = true;
-    s_dirty = true;
-    if (s_screen) set_backlight(active_brightness());
+    taskENTER_CRITICAL(&s_state_lock);
+    ui_idle_touch(&s_idle, hint, esp_timer_get_time());
+    taskEXIT_CRITICAL(&s_state_lock);
+    if (s_task) xTaskNotifyGive(s_task);
 }
 
 void ui_status_set_state(ui_status_state_t state, const char *message)
 {
-    s_state_value = state;
-    s_active = state == UI_STATUS_RECORDING || state == UI_STATUS_PROCESSING;
-    if (message) {
-        strncpy(s_message, message, sizeof(s_message) - 1);
-        s_message[sizeof(s_message) - 1] = 0;
-    } else {
-        s_message[0] = 0;
-    }
-    // State changes refresh the display and idle timer, but do not open the
-    // button hints on their own. Only a physical-key interaction should make
-    // the controls appear when the screen is otherwise at rest.
-    s_last_touch_us = esp_timer_get_time();
-    s_dirty = true;
-    if (s_screen) set_backlight(active_brightness());
+    taskENTER_CRITICAL(&s_state_lock);
+    const bool changed = ui_idle_set_state(&s_idle, state, message, esp_timer_get_time());
+    taskEXIT_CRITICAL(&s_state_lock);
+    if (changed && s_task) xTaskNotifyGive(s_task);
 }

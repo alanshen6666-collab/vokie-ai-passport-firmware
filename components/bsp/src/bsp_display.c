@@ -8,6 +8,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,6 +17,10 @@ static const char *TAG = "bsp_disp";
 static esp_lcd_panel_handle_t    s_panel;
 static esp_lcd_panel_io_handle_t s_io;
 static bool                      s_bl_ready;
+#if CONFIG_PM_ENABLE
+static esp_pm_lock_handle_t       s_backlight_lock;
+static bool                      s_backlight_lock_held;
+#endif
 
 // ---------------------------------------------------------------------------
 // ST7789P3 厂商专属初始化序列(porch / power / gamma)。
@@ -55,12 +60,16 @@ static const st_init_cmd_t ST7789P3_CMDS[] = {
 
 static void backlight_init(void) {
     if (BSP_LCD_BL < 0) { ESP_LOGW(TAG, "背光引脚未接 MCU,亮度不可调"); return; }
+#if CONFIG_PM_ENABLE
+    ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0,
+                                      "backlight", &s_backlight_lock));
+#endif
     ledc_timer_config_t t = {
         .speed_mode      = BSP_BL_LEDC_MODE,
         .timer_num       = BSP_BL_LEDC_TIMER,
         .duty_resolution = BSP_BL_LEDC_RES,
         .freq_hz         = BSP_BL_LEDC_FREQ_HZ,
-        .clk_cfg         = LEDC_AUTO_CLK,
+        .clk_cfg         = LEDC_USE_XTAL_CLK,
     };
     esp_err_t e = ledc_timer_config(&t);
     if (e != ESP_OK) { ESP_LOGE(TAG, "ledc_timer_config 失败: %s", esp_err_to_name(e)); return; }
@@ -142,8 +151,22 @@ esp_lcd_panel_io_handle_t bsp_display_io(void) { return s_io; }
 void bsp_display_backlight(uint8_t percent) {
     if (!s_bl_ready) return;
     if (percent > 100) percent = 100;
+#if CONFIG_PM_ENABLE
+    // Default LEDC output stops in light sleep. Keep lit screens awake to
+    // avoid flicker, and release only after driving the backlight fully off.
+    if (percent && !s_backlight_lock_held) {
+        ESP_ERROR_CHECK(esp_pm_lock_acquire(s_backlight_lock));
+        s_backlight_lock_held = true;
+    }
+#endif
     uint32_t max_duty = (1u << BSP_BL_LEDC_RES) - 1u;
     uint32_t duty = (max_duty * percent) / 100u;
-    ledc_set_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, duty);
-    ledc_update_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL);
+    ESP_ERROR_CHECK(ledc_set_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL));
+#if CONFIG_PM_ENABLE
+    if (!percent && s_backlight_lock_held) {
+        ESP_ERROR_CHECK(esp_pm_lock_release(s_backlight_lock));
+        s_backlight_lock_held = false;
+    }
+#endif
 }

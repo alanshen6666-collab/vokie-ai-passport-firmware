@@ -26,6 +26,12 @@
 - [ble-recovery-compatibility.zh_CN.md](engineering/ble-recovery-compatibility.zh_CN.md)：小程序 BLE 安装所需的产物、分区与 bootloader 强制契约。
 - [coding-conventions.zh_CN.md](engineering/coding-conventions.zh_CN.md)：代码约定（语言风格、复用、注释、测试同步、资源约束等）。
 
+## 待机功耗
+
+- [standby-power-decision.zh_CN.md](engineering/standby-power-decision.zh_CN.md)
+- [standby-power-contract.zh_CN.md](engineering/standby-power-contract.zh_CN.md)
+- [standby-power-plan.zh_CN.md](engineering/standby-power-plan.zh_CN.md)
+
 ## CI（ci）
 
 - [CI-validation.zh_CN.md](ci/CI-validation.zh_CN.md)：Pull Request 与 main 的自动仓库检查、host tests 和固件验证。

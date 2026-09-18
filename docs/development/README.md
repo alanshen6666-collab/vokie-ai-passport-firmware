@@ -17,6 +17,12 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [ble-recovery-compatibility.md](engineering/ble-recovery-compatibility.md): mandatory mini-program BLE install artifact, partition, and bootloader contract.
 - [coding-conventions.md](engineering/coding-conventions.md): source-code and resource conventions.
 
+## Standby power
+
+- [standby-power-decision.md](engineering/standby-power-decision.md)
+- [standby-power-contract.md](engineering/standby-power-contract.md)
+- [standby-power-plan.md](engineering/standby-power-plan.md)
+
 ## CI
 
 - [CI-validation.md](ci/CI-validation.md): pull-request and main-branch checks.

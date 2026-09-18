@@ -39,6 +39,16 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=24
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
+# Automatic light sleep between ADC scans and BLE events. Audio and a lit
+# backlight hold explicit no-light-sleep locks.
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+# Native USB Serial/JTAG cannot survive C3 light sleep. Retain the USB
+# connection while attached; automatic light sleep remains available unplugged.
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+CONFIG_BUTTON_PERIOD_TIME_MS=20
+CONFIG_BUTTON_DEBOUNCE_TICKS=1
 # Faster OK-button long-press recognition for clear-input (min 500ms in button component).
 CONFIG_BUTTON_LONG_PRESS_TIME_MS=650
 
@@ -54,3 +64,8 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=n
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=185
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
+CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP=y
+CONFIG_ESP_PHY_MAC_BB_PD=y

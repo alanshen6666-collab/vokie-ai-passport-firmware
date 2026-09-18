@@ -43,6 +43,25 @@ run_static_checks() {
     for scenario in {0..14}; do
         "${test_dir}/test_bsp_battery" "${scenario}"
     done
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ui_idle.c -o "${test_dir}/test_ui_idle"
+    "${test_dir}/test_ui_idle"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_usb_standby.c -o "${test_dir}/test_usb_standby"
+    "${test_dir}/test_usb_standby"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DCONFIG_PM_ENABLE=1 \
+        -Itests/power_stubs -Itests/battery_stubs -Icomponents/bsp/include \
+        tests/test_bsp_audio_power.c components/bsp/src/bsp_audio.c \
+        -o "${test_dir}/test_bsp_audio_power"
+    "${test_dir}/test_bsp_audio_power"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Itests/lvgl_power_stubs -Itests/power_stubs -Itests/battery_stubs \
+        tests/test_lvgl_power.c components/bsp/src/bsp_display_lvgl.c \
+        -o "${test_dir}/test_lvgl_power"
+    "${test_dir}/test_lvgl_power"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_button_gesture.c -o "${test_dir}/test_button_gesture"
+    "${test_dir}/test_button_gesture"
     python3 tests/test_verify_firmware.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
@@ -62,6 +81,24 @@ run_firmware_checks() (
     SDKCONFIG_DEFAULTS="${repo_root}/sdkconfig.defaults" \
         idf.py -B "${validation_build_dir}" \
         -D "SDKCONFIG=${validation_build_dir}/sdkconfig" build
+    python3 - "${validation_build_dir}/sdkconfig" <<'PYCONFIG'
+import pathlib
+import sys
+config = set(pathlib.Path(sys.argv[1]).read_text().splitlines())
+required = {
+    "CONFIG_PM_ENABLE=y", "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
+    "CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y",
+    "CONFIG_BT_CTRL_MODEM_SLEEP=y", "CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y",
+    "CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y",
+    "CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP=y", "CONFIG_ESP_PHY_MAC_BB_PD=y",
+    "CONFIG_BUTTON_PERIOD_TIME_MS=20", "CONFIG_BUTTON_DEBOUNCE_TICKS=1",
+    "CONFIG_BUTTON_LONG_PRESS_TIME_MS=650",
+}
+missing = required - config
+if missing:
+    sys.exit("Power configuration missing: " + ", ".join(sorted(missing)))
+print("Standby power configuration: PASS")
+PYCONFIG
     idf.py -B "${validation_build_dir}" merge-bin \
         -o "${validation_build_dir}/FoloToy-AI-Passport-full.bin"
     python3 tools/verify_firmware.py "${validation_build_dir}"

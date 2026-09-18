@@ -4,6 +4,8 @@
 #include "boot_sound.h"
 #include "ui_status.h"
 #include "bsp_button.h"
+#include "button_gesture.h"
+#include "esp_timer.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -57,9 +59,10 @@ static volatile uint32_t s_control_seq;
 static volatile uint32_t s_button_seq;
 static TaskHandle_t s_audio_task;
 static bool s_started;
-static TickType_t s_ok_press_tick;
-static bool s_ok_long_sent;
-#define BUTTON_LONG_PRESS_MS 500
+static button_gesture_t s_button_gestures[3];
+static esp_timer_handle_t s_ok_hold_timer;
+static volatile uint32_t s_connection_epoch = 1;
+#define BUTTON_LONG_PRESS_MS CONFIG_BUTTON_LONG_PRESS_TIME_MS
 
 static bool host_is_ready(void)
 {
@@ -87,6 +90,15 @@ static void send_button_event(bsp_btn_t button, const char *event,
              button_name(button), event, (unsigned long)duration_ms,
              (unsigned long)++s_button_seq);
     (void)notify_control(json);
+}
+
+static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user);
+
+static void ok_hold_expired(void *arg)
+{
+    (void)arg;
+    // Both this timer and the button driver's callbacks run on ESP_TIMER_TASK.
+    button_cb(BSP_BTN_OK, BSP_BTN_LONG, NULL);
 }
 
 static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
@@ -178,9 +190,12 @@ static void audio_task(void *arg)
     (void)arg;
     // Runs once per boot, outside button/LVGL callbacks. Keep the existing
     // microphone format and prioritize a voice request over the startup sound.
-    esp_err_t boot_err = boot_sound_play(boot_pcm_start,
-                                        boot_pcm_end - boot_pcm_start,
-                                        boot_recording_requested);
+    esp_err_t boot_err = bsp_audio_set_format(16000, 16, 1);
+    if (boot_err == ESP_OK) {
+        boot_err = boot_sound_play(boot_pcm_start,
+                                  boot_pcm_end - boot_pcm_start,
+                                  boot_recording_requested);
+    }
     if (boot_err != ESP_OK) {
         ESP_LOGW(TAG, "Boot sound unavailable: %s; continuing voice input",
                  esp_err_to_name(boot_err));
@@ -188,21 +203,75 @@ static void audio_task(void *arg)
     int16_t pcm[AUDIO_SAMPLES];
     uint8_t encoded[ADPCM_BYTES];
     uint32_t sequence = 0;
+    uint32_t capture_session = 0;
+    bool capturing = false;
     for (;;) {
-        if (!s_recording) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-        if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
-            s_stop_requested = true; send_error(s_session, "audio_read");
-            s_recording = false; continue;
+        if (!s_recording) {
+            capturing = false;
+            sequence = 0;
+            // A failed pause keeps the affected I2S channel and its sleep lock
+            // held; retry after a short pause instead of aborting the device.
+            // A capture request that arrives during the retry is picked up by
+            // the loop condition, so no notification is lost.
+            if (bsp_audio_pause() != ESP_OK) {
+                ESP_LOGE(TAG, "I2S pause failed; retrying");
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+            // A request during pause leaves a pending notification. Do not
+            // clear notifications separately from this atomic wait.
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
         }
+        if (!capturing || capture_session != s_session) {
+            capture_session = s_session;
+            sequence = 0;
+            // Pause also resets DMA between sessions; a failure returns to
+            // idle so the next press can retry instead of rebooting.
+            if (bsp_audio_pause() != ESP_OK) {
+                if (s_recording && capture_session == s_session) {
+                    s_recording = false;
+                    s_stop_requested = false;
+                    send_error(capture_session, "audio_pause");
+                    ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+                }
+                continue;
+            }
+            if (bsp_audio_set_format(16000, 16, 1) != ESP_OK) {
+                if (s_recording && capture_session == s_session) {
+                    s_recording = false;
+                    s_stop_requested = false;
+                    send_error(capture_session, "audio_open");
+                    ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+                }
+                continue;
+            }
+            capturing = true;
+        }
+        if (!s_recording || capture_session != s_session) continue;
+        if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
+            if (s_recording && capture_session == s_session) {
+                s_stop_requested = false;
+                send_error(capture_session, "audio_read");
+                s_recording = false;
+                ui_status_set_state(UI_STATUS_ERROR, "Microphone unavailable");
+            }
+            continue;
+        }
+        // A disconnect or a new session during blocking I/O invalidates PCM.
+        if (!s_recording || capture_session != s_session) continue;
         if (!s_audio_subscribed || ble_att_mtu(s_conn) < 185) {
-            s_stop_requested = true; send_error(s_session, "mtu");
-            s_recording = false; continue;
+            s_stop_requested = false; send_error(s_session, "mtu");
+            s_recording = false;
+            ui_status_set_state(UI_STATUS_ERROR, "BLE audio unavailable");
+            continue;
         }
         size_t encoded_len = encode_adpcm(pcm, encoded);
         if (notify_audio(s_session, sequence++, encoded, encoded_len) != 0) {
             s_stop_requested = true;
             send_error(s_session, "transport");
             s_recording = false;
+            ui_status_set_state(UI_STATUS_ERROR, "BLE send failed");
         }
         if (s_stop_requested) {
             char json[MAX_CONTROL + 1];
@@ -218,27 +287,57 @@ static void audio_task(void *arg)
 static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
 {
     (void)user;
-    switch (button) {
-    case BSP_BTN_UP: ui_status_touch(UI_STATUS_HINT_VOICE); break;
-    case BSP_BTN_DOWN: ui_status_touch(UI_STATUS_HINT_SEND); break;
-    case BSP_BTN_OK: ui_status_touch(UI_STATUS_HINT_UNDO); break;
-    default: break;
+    if (button < BSP_BTN_UP || button > BSP_BTN_OK) return;
+    button_edge_t edge;
+    switch (event) {
+    case BSP_BTN_PRESS: edge = BUTTON_EDGE_PRESS; break;
+    case BSP_BTN_RELEASE: edge = BUTTON_EDGE_RELEASE; break;
+    case BSP_BTN_LONG: edge = BUTTON_EDGE_LONG; break;
+    default: return; // Do not wait for or replay delayed CLICK/DOUBLE events.
     }
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const uint32_t context = host_is_ready() ? s_connection_epoch : 0;
+    button_gesture_t *gesture = &s_button_gestures[button];
+    button_action_t action = button_gesture_update(gesture, edge, now_ms,
+                                                   context, BUTTON_LONG_PRESS_MS);
+    const uint32_t duration_ms = now_ms - gesture->started_ms;
+    if (button == BSP_BTN_OK && event == BSP_BTN_PRESS) {
+        // The driver's double-click state does not time a held second press.
+        // An independent one-shot keeps OK long-press valid after quick taps.
+        (void)esp_timer_stop(s_ok_hold_timer);
+        esp_err_t err = esp_timer_start_once(s_ok_hold_timer,
+                                             BUTTON_LONG_PRESS_MS * 1000);
+        if (err != ESP_OK) ESP_LOGW(TAG, "OK hold timer: %s", esp_err_to_name(err));
+    } else if (button == BSP_BTN_OK && event == BSP_BTN_RELEASE) {
+        (void)esp_timer_stop(s_ok_hold_timer);
+    }
+    if (event == BSP_BTN_PRESS) {
+        switch (button) {
+        case BSP_BTN_UP: ui_status_touch(UI_STATUS_HINT_VOICE); break;
+        case BSP_BTN_DOWN: ui_status_touch(UI_STATUS_HINT_SEND); break;
+        case BSP_BTN_OK: ui_status_touch(UI_STATUS_HINT_UNDO); break;
+        default: break;
+        }
+    }
+    if (action == BUTTON_ACTION_NONE) return;
     if (button == BSP_BTN_UP) {
-        if (s_conn == NO_CONN || !s_host_ready || event != BSP_BTN_CLICK) return;
-        // Click-to-toggle keeps the release event from stopping a new session.
+        if (s_conn == NO_CONN || !s_host_ready || action != BUTTON_ACTION_CLICK) return;
+        // One toggle per short release, without the double-click wait.
         if (!s_recording) {
             s_session = esp_random();
             if (s_session == 0) s_session = 1;
             s_control_seq = 0;
-            s_recording = true;
-            ui_status_set_state(UI_STATUS_RECORDING, "Listening");
+            s_stop_requested = false;
             char json[MAX_CONTROL + 1];
             snprintf(json, sizeof(json), "{\"v\":1,\"type\":\"ptt_down\",\"sessionId\":%lu,\"seq\":0}",
                      (unsigned long)s_session);
             if (notify_control(json) != 0) {
                 s_recording = false;
                 ui_status_set_state(UI_STATUS_ERROR, "BLE send failed");
+            } else if (host_is_ready()) {
+                s_recording = true;
+                ui_status_set_state(UI_STATUS_RECORDING, "Listening");
+                if (s_audio_task) xTaskNotifyGive(s_audio_task);
             }
         } else {
             s_stop_requested = true;
@@ -246,7 +345,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
         }
         return;
     }
-    if (button == BSP_BTN_DOWN && event == BSP_BTN_CLICK) {
+    if (button == BSP_BTN_DOWN && action == BUTTON_ACTION_CLICK) {
         if (!host_is_ready()) return;
         send_button_event(button, "click", 0);
         ui_status_set_state(UI_STATUS_READY, "Send message");
@@ -254,25 +353,19 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
     }
     if (button == BSP_BTN_OK) {
         if (!host_is_ready()) return;
-        if (event == BSP_BTN_PRESS) {
-            s_ok_press_tick = xTaskGetTickCount();
-            s_ok_long_sent = false;
-        } else if (event == BSP_BTN_LONG) {
-            s_ok_long_sent = true;
+        if (action == BUTTON_ACTION_LONG) {
             // While a voice request is still being captured, the edit button is
             // an ESC/cancel gesture. The Worker owns the full cloud/paste
             // cancellation window; this flag only releases the microphone.
             if (s_recording) {
                 s_stop_requested = true;
-                send_button_event(button, "long", BUTTON_LONG_PRESS_MS);
+                send_button_event(button, "long", duration_ms);
                 ui_status_set_state(UI_STATUS_PROCESSING, "Cancelling");
             } else {
-                send_button_event(button, "long", BUTTON_LONG_PRESS_MS);
+                send_button_event(button, "long", duration_ms);
                 ui_status_set_state(UI_STATUS_READY, "Clear input");
             }
-        } else if (event == BSP_BTN_CLICK && !s_ok_long_sent) {
-            TickType_t elapsed = xTaskGetTickCount() - s_ok_press_tick;
-            uint32_t duration_ms = (uint32_t)((elapsed * 1000U) / configTICK_RATE_HZ);
+        } else if (action == BUTTON_ACTION_CLICK) {
             if (s_recording) {
                 s_stop_requested = true;
                 send_button_event(button, "click", duration_ms);
@@ -370,6 +463,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     (void)arg;
     if (event->type == BLE_GAP_EVENT_CONNECT) {
         if (event->connect.status == 0) {
+            ++s_connection_epoch;
             s_conn = event->connect.conn_handle;
             s_host_ready = false; s_control_subscribed = false; s_audio_subscribed = false;
             ui_status_set_state(UI_STATUS_STARTING, "Connecting");
@@ -378,6 +472,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             advertise();
         }
     } else if (event->type == BLE_GAP_EVENT_DISCONNECT) {
+        ++s_connection_epoch;
         s_recording = false; s_stop_requested = false; s_host_ready = false;
         s_control_subscribed = false; s_audio_subscribed = false; s_conn = NO_CONN;
         ui_status_set_state(UI_STATUS_DISCONNECTED, "Waiting for Vokie");
@@ -406,11 +501,14 @@ esp_err_t vokie_ble_start(void)
     if (s_started) return ESP_OK;
     esp_err_t err = bsp_audio_init();
     if (err != ESP_OK) return err;
-    // bsp_audio_init() creates the codec but does not open a stream format.
-    // Open the microphone as the exact PCM format advertised over BLE;
-    // otherwise the first bsp_audio_read() fails and immediately ends PTT.
-    err = bsp_audio_set_format(16000, 16, 1);
-    if (err != ESP_OK) return err;
+    // The worker owns stream open/close as well as all PCM I/O.
+    if (!s_ok_hold_timer) {
+        const esp_timer_create_args_t timer = {
+            .callback = ok_hold_expired, .name = "ok_hold",
+        };
+        err = esp_timer_create(&timer, &s_ok_hold_timer);
+        if (err != ESP_OK) return err;
+    }
     if (bsp_button_init(button_cb, NULL) != ESP_OK) return ESP_FAIL;
     int rc = nimble_port_init(); if (rc != ESP_OK) return ESP_FAIL;
     ble_svc_gap_init(); ble_svc_gatt_init(); ble_svc_gap_device_name_set(DEVICE_NAME);

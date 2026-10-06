@@ -10,6 +10,7 @@
 #include "lvgl.h"
 #include "ui_battery.h"
 #include "ui_idle.h"
+#include "ui_reply_text.h"
 #include "vokie_symbol_asset.h"
 #include "vokie_title_font.h"
 #include <stdio.h>
@@ -47,6 +48,17 @@
 #define UI_HINT_GROUP_W 42
 #define UI_HINT_ROW_H 22
 #define UI_BATTERY_POLL_US (30LL * 1000LL * 1000LL)
+#define UI_REPLY_MAX_BYTES 2048
+#define UI_REPLY_PAGE_BUFFER 512
+#define UI_REPLY_TIMEOUT_US (20LL * 1000 * 1000)
+// The reply overlay prefers the built-in Source Han Sans SC coverage (ASCII
+// plus the most common CJK characters). The Montserrat fallback keeps the
+// build working if a fork disables the CJK font.
+#if defined(LV_FONT_SOURCE_HAN_SANS_SC_16_CJK) && LV_FONT_SOURCE_HAN_SANS_SC_16_CJK
+#define UI_REPLY_FONT (&lv_font_source_han_sans_sc_16_cjk)
+#else
+#define UI_REPLY_FONT (&lv_font_montserrat_16)
+#endif
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_state;
@@ -62,6 +74,17 @@ static uint8_t s_backlight_level;
 static bool s_hints_visible;
 static ui_status_hint_t s_displayed_hints;
 static TaskHandle_t s_task;
+static char s_reply_text[UI_REPLY_MAX_BYTES + 1];
+static portMUX_TYPE s_reply_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_reply_revision;
+static uint32_t s_reply_rendered_revision;
+static bool s_reply_visible;
+static bool s_reply_shown;
+static int s_reply_page;
+static int64_t s_reply_deadline_us;
+static lv_obj_t *s_reply_panel;
+static lv_obj_t *s_reply_page_label;
+static lv_obj_t *s_reply_body;
 
 // LVGL retains these arrays. Startup keeps all three original guide paths;
 // a single hint starts at the SEND row and points to its physical key.
@@ -203,6 +226,41 @@ static void draw_battery(void)
     lv_obj_set_pos(s_battery, UI_BATTERY_X, UI_BATTERY_Y);
 }
 
+static void draw_reply_panel(void)
+{
+    // Full-screen overlay for host reply text. Created hidden; the status
+    // worker shows it when a complete host_text message arrives.
+    s_reply_panel = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_reply_panel);
+    lv_obj_set_pos(s_reply_panel, 0, 0);
+    lv_obj_set_size(s_reply_panel, BSP_LCD_W, BSP_LCD_H);
+    lv_obj_set_style_bg_color(s_reply_panel, lv_color_hex(UI_BG), 0);
+    lv_obj_set_style_bg_opa(s_reply_panel, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_reply_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_reply_panel, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *title = label(s_reply_panel, "OpenClaw", &lv_font_montserrat_14,
+                            UI_BLUE, UI_CONTENT_W);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_pos(title, 16, 14);
+
+    s_reply_page_label = label(s_reply_panel, "", &lv_font_montserrat_10,
+                               UI_MUTED, UI_BATTERY_W);
+    lv_obj_set_style_text_align(s_reply_page_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_reply_page_label, BSP_LCD_W - 16 - UI_BATTERY_W, 17);
+
+    s_reply_body = lv_label_create(s_reply_panel);
+    lv_obj_set_style_text_font(s_reply_body, UI_REPLY_FONT, 0);
+    lv_obj_set_style_text_color(s_reply_body, lv_color_hex(UI_WHITE), 0);
+    lv_label_set_long_mode(s_reply_body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(s_reply_body, 16, 42);
+    lv_obj_set_size(s_reply_body, BSP_LCD_W - 32, BSP_LCD_H - 42 - 34);
+
+    lv_obj_t *footer = label(s_reply_panel, "OK next    UP close",
+                             &lv_font_montserrat_10, UI_MUTED, UI_CONTENT_W);
+    lv_obj_set_pos(footer, 0, BSP_LCD_H - 24);
+}
+
 static void set_button_hints_visible(ui_status_hint_t hints)
 {
     if (!s_button_hints) return;
@@ -259,6 +317,55 @@ static ui_idle_t snapshot(void)
     return state;
 }
 
+// Called only by the status worker: closes the overlay when its idle timeout
+// expired and reports whether it should be visible now.
+static bool reply_deadline_check(int64_t now_us)
+{
+    bool visible;
+    taskENTER_CRITICAL(&s_reply_lock);
+    if (s_reply_visible && now_us >= s_reply_deadline_us) {
+        s_reply_visible = false;
+        ++s_reply_revision;
+    }
+    visible = s_reply_visible;
+    taskEXIT_CRITICAL(&s_reply_lock);
+    return visible;
+}
+
+// Called only with the LVGL lock held by the status worker.
+static void render_reply_if_needed(bool visible)
+{
+    if (!s_reply_panel) return;
+    uint32_t revision;
+    bool snapshot_visible;
+    int page;
+    int pages = 1;
+    char page_text[UI_REPLY_PAGE_BUFFER] = {0};
+    taskENTER_CRITICAL(&s_reply_lock);
+    revision = s_reply_revision;
+    snapshot_visible = s_reply_visible;
+    page = s_reply_page;
+    if (snapshot_visible) {
+        ui_reply_page_copy(s_reply_text, page, page_text, sizeof(page_text));
+        pages = ui_reply_page_count(s_reply_text);
+        if (pages < 1) pages = 1;
+    }
+    taskEXIT_CRITICAL(&s_reply_lock);
+
+    if (revision == s_reply_rendered_revision && visible == s_reply_shown) return;
+    s_reply_rendered_revision = revision;
+    s_reply_shown = visible;
+
+    if (!visible) {
+        lv_obj_add_flag(s_reply_panel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_remove_flag(s_reply_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_reply_panel);
+    lv_label_set_text(s_reply_body, page_text);
+    lv_label_set_text_fmt(s_reply_page_label, "%d/%d", page + 1, pages);
+}
+
 static void status_task(void *arg)
 {
     (void)arg;
@@ -270,14 +377,19 @@ static void status_task(void *arg)
     for (;;) {
         const ui_idle_t state = snapshot();
         const int64_t now_us = esp_timer_get_time();
-        const uint8_t brightness = ui_idle_brightness(&state, now_us);
-        const ui_status_hint_t hints = ui_idle_hints(&state, now_us);
+        const bool reply_visible = reply_deadline_check(now_us);
+        const uint8_t brightness =
+            reply_visible ? 65 : ui_idle_brightness(&state, now_us);
+        const ui_status_hint_t hints =
+            reply_visible ? UI_STATUS_HINT_NONE : ui_idle_hints(&state, now_us);
         bool retry = false;
         if (bsp_lvgl_lock(100)) {
             if (brightness) {
                 set_backlight(brightness);
                 ESP_ERROR_CHECK(bsp_lvgl_set_paused(false));
-                if (state.revision != rendered_revision || hints != rendered_hints) {
+                render_reply_if_needed(reply_visible);
+                if (!reply_visible &&
+                    (state.revision != rendered_revision || hints != rendered_hints)) {
                     render_state(&state, hints);
                     rendered_revision = state.revision;
                     rendered_hints = hints;
@@ -317,9 +429,15 @@ static void status_task(void *arg)
         }
         const int64_t after_work_us = esp_timer_get_time();
         int64_t delay_us = ui_idle_wait_us(&state, after_work_us, next_battery_us);
-        // A blocking battery read may cross a dim/off/hint deadline.
-        if (ui_idle_brightness(&state, after_work_us) != brightness ||
-            ui_idle_hints(&state, after_work_us) != hints) delay_us = 0;
+        // A blocking battery read may cross a dim/off/hint deadline. The reply
+        // overlay forces its own brightness, so skip the idle-state comparison
+        // while it is visible and poll at a modest rate for its timeout.
+        if (reply_visible) {
+            delay_us = 250000;
+        } else if (ui_idle_brightness(&state, after_work_us) != brightness ||
+                   ui_idle_hints(&state, after_work_us) != hints) {
+            delay_us = 0;
+        }
         if (retry && delay_us > 20000) delay_us = 20000;
         TickType_t ticks = pdMS_TO_TICKS((delay_us + 999) / 1000);
         // Pending notifications wake immediately, including during I2C work.
@@ -350,6 +468,7 @@ void ui_status_init(void)
     draw_vokie();
     draw_button_rail();
     draw_battery();
+    draw_reply_panel();
 
     s_state = label(s_screen, "", &lv_font_montserrat_20, UI_BLUE, UI_CONTENT_W);
     lv_obj_set_pos(s_state, UI_CONTENT_X, UI_STATE_Y);
@@ -386,5 +505,61 @@ void ui_status_set_state(ui_status_state_t state, const char *message)
     taskENTER_CRITICAL(&s_state_lock);
     const bool changed = ui_idle_set_state(&s_idle, state, message, esp_timer_get_time());
     taskEXIT_CRITICAL(&s_state_lock);
+    if (changed && s_task) xTaskNotifyGive(s_task);
+}
+
+void ui_status_show_reply(const char *text)
+{
+    if (!text || !text[0]) return;
+    taskENTER_CRITICAL(&s_reply_lock);
+    strncpy(s_reply_text, text, sizeof(s_reply_text) - 1);
+    s_reply_text[sizeof(s_reply_text) - 1] = '\0';
+    s_reply_page = 0;
+    s_reply_visible = true;
+    s_reply_deadline_us = esp_timer_get_time() + UI_REPLY_TIMEOUT_US;
+    ++s_reply_revision;
+    taskEXIT_CRITICAL(&s_reply_lock);
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
+bool ui_status_reply_visible(void)
+{
+    bool visible;
+    taskENTER_CRITICAL(&s_reply_lock);
+    visible = s_reply_visible;
+    taskEXIT_CRITICAL(&s_reply_lock);
+    return visible;
+}
+
+bool ui_status_reply_next_page(void)
+{
+    bool more = false;
+    taskENTER_CRITICAL(&s_reply_lock);
+    if (s_reply_visible) {
+        const int pages = ui_reply_page_count(s_reply_text);
+        if (s_reply_page + 1 < pages) {
+            s_reply_page += 1;
+            more = true;
+        } else {
+            s_reply_visible = false;
+        }
+        s_reply_deadline_us = esp_timer_get_time() + UI_REPLY_TIMEOUT_US;
+        ++s_reply_revision;
+    }
+    taskEXIT_CRITICAL(&s_reply_lock);
+    if (s_task) xTaskNotifyGive(s_task);
+    return more;
+}
+
+void ui_status_reply_dismiss(void)
+{
+    bool changed = false;
+    taskENTER_CRITICAL(&s_reply_lock);
+    if (s_reply_visible) {
+        s_reply_visible = false;
+        ++s_reply_revision;
+        changed = true;
+    }
+    taskEXIT_CRITICAL(&s_reply_lock);
     if (changed && s_task) xTaskNotifyGive(s_task);
 }

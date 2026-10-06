@@ -32,7 +32,11 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_FONT_MONTSERRAT_10=y
 CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
+# host_text 回复浮层使用 LVGL 内置思源黑体 SC 覆盖（ASCII + 常用汉字）；
+# 若禁用该字体，固件自动回退到 Montserrat 16（仅 ASCII）。
+CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
 # 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
 CONFIG_LV_MEM_SIZE_KILOBYTES=24

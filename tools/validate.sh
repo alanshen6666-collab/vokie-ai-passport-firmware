@@ -47,6 +47,9 @@ run_static_checks() {
         tests/test_ui_idle.c -o "${test_dir}/test_ui_idle"
     "${test_dir}/test_ui_idle"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ui_reply_text.c -o "${test_dir}/test_ui_reply_text"
+    "${test_dir}/test_ui_reply_text"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_usb_standby.c -o "${test_dir}/test_usb_standby"
     "${test_dir}/test_usb_standby"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DCONFIG_PM_ENABLE=1 \

@@ -24,7 +24,7 @@ Control 只接受有响应写。无响应写和读取 Control 不属于 V1 契�
 Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设备到主机的消息如下：
 
 ```json
-{"v":1,"type":"hello","device":"ai-passport","fw":"0.1.0","codec":"ima-adpcm","sampleRate":16000,"channels":1,"frameMs":20}
+{"v":1,"type":"hello","device":"ai-passport","fw":"0.1.0","codec":"ima-adpcm","sampleRate":16000,"channels":1,"frameMs":20,"features":["host_text"]}
 {"v":1,"type":"ptt_down","sessionId":123,"seq":0}
 {"v":1,"type":"ptt_up","sessionId":123,"seq":1,"finalSequence":7}
 {"v":1,"type":"button_event","button":"down","event":"click","durationMs":0,"seq":2}
@@ -46,6 +46,23 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设�
 ```
 
 固件接受 `ready`、`recording`、`processing`、`success` 和 `error`。Vokie 插件通常发送 `ready`、`processing`、`success` 或 `error`。可选的 message 字段仅用于诊断，不能包含转写文本。
+
+较新的固件会在 `hello` 中增加 `features` 数组（例如 `["host_text"]`）。主机必须忽略未知条目；不使用任何可选特性时 V1 依然可用。
+
+### 可选的回复文字显示
+
+声明 `host_text` 的固件可以在设备屏幕上显示一段简短的主机回复。主机把 UTF-8 文本切分为若干块发送，每块必须能放进一个控制消息：
+
+```json
+{"v":1,"type":"host_text","id":123,"chunk":0,"count":2,"text":"这是一段回复，"}
+{"v":1,"type":"host_text","id":123,"chunk":1,"count":2,"text":"分为两块发送。"}
+```
+
+- `id` 标识同一条消息的各分块；从 `chunk: 0` 重新开始时替换未完成的消息。`count` 是分块总数（1 到 16），`chunk` 是从零开始的序号。
+- 每个值都必须满足 182 字节的控制消息上限，因此建议每块文本控制在约 110 个 UTF-8 字节以内，并且绝不能切断多字节字符。
+- 设备最多组装 2048 字节，替换非法 UTF-8 和控制字符后在全屏浮层上显示。`OK` 向后翻页（最后一页时关闭）；`UP` 或 `DOWN` 关闭浮层；20 秒无操作后自动隐藏。
+- 主机只有在 `hello` 声明了该特性后才能发送 `host_text`；不支持该特性的固件会忽略此消息。
+- 该浮层仅用于显示：不承载会话状态，也不会出现在诊断信息中。
 
 ## 按键语义
 

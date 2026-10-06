@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- Added an optional `host_text` host message, advertised as `"features":["host_text"]` in `hello`: it renders chunked UTF-8 reply text on a full-screen overlay with the built-in Source Han Sans SC font (`OK` pages forward, `UP`/`DOWN` close, 20-second idle hide). The overlay is display-only; firmware without the feature ignores the message.
+
 - Explicitly mute and power down the speaker DAC before pausing its clocks, while keeping microphone bias/filter state. A zero playback volume now disables the output; only deliberate playback can re-enable it with a running stream. Verify output registers and keep the stream awake for retry if the transition fails. This addresses an unsafe idle-output path identified while investigating intermittent post-flash noise; acoustic reproduction remains a device check.
 
 - Execute short button actions on debounced release instead of waiting for double-click classification. Consecutive taps remain separate actions; OK keeps its 650 ms long-press clear/cancel behavior even after a quick tap, without deleting again on release.

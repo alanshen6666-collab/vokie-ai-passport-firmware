@@ -24,3 +24,11 @@ void ui_status_init(void);
 void ui_status_set_state(ui_status_state_t state, const char *message);
 // Non-blocking: wake the display and request one hint, or all three hints.
 void ui_status_touch(ui_status_hint_t hint);
+
+// Optional OpenClaw reply overlay. Safe to call from any task; rendering
+// happens on the status worker, and the backlight stays on while visible.
+void ui_status_show_reply(const char *text);
+bool ui_status_reply_visible(void);
+// Advance to the next page; returns false when the overlay closed itself.
+bool ui_status_reply_next_page(void);
+void ui_status_reply_dismiss(void);

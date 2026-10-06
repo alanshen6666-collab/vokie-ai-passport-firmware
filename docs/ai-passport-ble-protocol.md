@@ -30,7 +30,7 @@ Control values are complete UTF-8 JSON objects with `v: 1` and a maximum size
 of 182 bytes. Device-to-host messages are:
 
 ```json
-{"v":1,"type":"hello","device":"ai-passport","fw":"0.1.0","codec":"ima-adpcm","sampleRate":16000,"channels":1,"frameMs":20}
+{"v":1,"type":"hello","device":"ai-passport","fw":"0.1.0","codec":"ima-adpcm","sampleRate":16000,"channels":1,"frameMs":20,"features":["host_text"]}
 {"v":1,"type":"ptt_down","sessionId":123,"seq":0}
 {"v":1,"type":"ptt_up","sessionId":123,"seq":1,"finalSequence":7}
 {"v":1,"type":"button_event","button":"down","event":"click","durationMs":0,"seq":2}
@@ -56,6 +56,35 @@ Host-to-device messages are:
 The firmware accepts `ready`, `recording`, `processing`, `success`, and `error`.
 The Vokie plugin normally sends `ready`, `processing`, `success`, or `error`.
 The optional message field is diagnostic and must not contain transcripts.
+
+Newer firmware adds a `features` array to `hello` (for example
+`["host_text"]`). Hosts must ignore unknown entries; V1 remains usable without
+any optional feature.
+
+### Optional host text display
+
+Firmware that advertises `host_text` can render a short host reply on the
+device screen. The host sends the UTF-8 text split into chunks that each fit
+one control payload:
+
+```json
+{"v":1,"type":"host_text","id":123,"chunk":0,"count":2,"text":"A reply that"}
+{"v":1,"type":"host_text","id":123,"chunk":1,"count":2,"text":" spans two chunks."}
+```
+
+- `id` groups the chunks of one message; restarting at `chunk: 0` replaces any
+  incomplete message. `count` is the total number of chunks (1 to 16) and
+  `chunk` is the zero-based index.
+- Each value must fit the 182-byte control limit, so hosts should keep chunk
+  text near 110 UTF-8 bytes and never split a multi-byte character.
+- The device assembles at most 2048 bytes, replaces invalid UTF-8 and control
+  characters, and shows the text on a full-screen overlay. `OK` pages forward
+  (and closes on the last page); `UP` or `DOWN` closes the overlay; it also
+  hides itself after 20 seconds of inactivity.
+- Hosts must only send `host_text` after `hello` advertises the feature;
+  firmware without it ignores the message.
+- The overlay is display-only: it carries no session state and never appears
+  in diagnostics.
 
 ## Button semantics
 

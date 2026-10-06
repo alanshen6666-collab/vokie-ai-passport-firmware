@@ -2,6 +2,7 @@
 
 #include "bsp_audio.h"
 #include "boot_sound.h"
+#include "host_text.h"
 #include "ui_status.h"
 #include "bsp_button.h"
 #include "button_gesture.h"
@@ -319,6 +320,20 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
         default: break;
         }
     }
+    if (ui_status_reply_visible()) {
+        // The reply overlay owns the keys while it is visible: OK pages
+        // forward (and closes on the last page); UP and DOWN close it.
+        if (action == BUTTON_ACTION_CLICK) {
+            if (button == BSP_BTN_OK) {
+                (void)ui_status_reply_next_page();
+            } else {
+                ui_status_reply_dismiss();
+            }
+        } else if (action == BUTTON_ACTION_LONG && button == BSP_BTN_OK) {
+            ui_status_reply_dismiss();
+        }
+        return;
+    }
     if (action == BUTTON_ACTION_NONE) return;
     if (button == BSP_BTN_UP) {
         if (s_conn == NO_CONN || !s_host_ready || action != BUTTON_ACTION_CLICK) return;
@@ -383,7 +398,7 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
     (void)attr;
     int kind = (int)(intptr_t)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && kind == 3) {
-        const char info[] = "{\"v\":1,\"type\":\"hello\",\"device\":\"ai-passport\",\"fw\":\"0.1.0\",\"codec\":\"ima-adpcm\",\"sampleRate\":16000,\"channels\":1,\"frameMs\":20}";
+        const char info[] = "{\"v\":1,\"type\":\"hello\",\"device\":\"ai-passport\",\"fw\":\"0.1.0\",\"codec\":\"ima-adpcm\",\"sampleRate\":16000,\"channels\":1,\"frameMs\":20,\"features\":[\"host_text\"]}";
         return os_mbuf_append(ctxt->om, info, strlen(info));
     }
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR || kind != 1) return BLE_ATT_ERR_READ_NOT_PERMITTED;
@@ -412,6 +427,8 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
                 ui_status_set_state(UI_STATUS_ERROR, "Try again");
             }
         }
+    } else if (cJSON_IsString(type) && strcmp(type->valuestring, "host_text") == 0) {
+        host_text_handle_message(root);
     }
     cJSON_Delete(root); (void)conn; return 0;
 }
@@ -489,7 +506,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (!s_control_subscribed || !s_audio_subscribed) {
             hello_sent = false;
         } else if (!hello_sent) {
-            const char hello[] = "{\"v\":1,\"type\":\"hello\",\"device\":\"ai-passport\",\"fw\":\"0.1.0\",\"codec\":\"ima-adpcm\",\"sampleRate\":16000,\"channels\":1,\"frameMs\":20}";
+            const char hello[] = "{\"v\":1,\"type\":\"hello\",\"device\":\"ai-passport\",\"fw\":\"0.1.0\",\"codec\":\"ima-adpcm\",\"sampleRate\":16000,\"channels\":1,\"frameMs\":20,\"features\":[\"host_text\"]}";
             hello_sent = notify_control(hello) == 0;
         }
     }

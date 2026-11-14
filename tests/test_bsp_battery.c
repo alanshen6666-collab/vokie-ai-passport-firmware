@@ -85,10 +85,19 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t device,
     assert((size_t)reg + rx_size <= sizeof(registers));
     if (read_failure || (scenario == 4 && reg == 0)) return ESP_ERR_TIMEOUT;
     if (scenario == 11 && reg == 0x0b) return ESP_ERR_TIMEOUT;
+    if (reg == 2 && scenario == 15 && soc_attempts <= 3) {
+        memset(rx, 0, rx_size);
+        return ESP_OK;
+    }
+    if (reg == 2 && scenario == 16) {
+        memset(rx, 0, rx_size);
+        return ESP_OK;
+    }
     if (reg == 4 && calculate_soc) {
         ++soc_attempts;
         if (scenario == 13 && soc_attempts < 3) return ESP_ERR_TIMEOUT;
-        if (scenario != 7 && registers[8] == 0 && (registers[0x0b] & 0x80) &&
+        if ((scenario == 15 && soc_attempts <= 3) || scenario == 16) registers[4] = 0;
+        else if (scenario != 7 && registers[8] == 0 && (registers[0x0b] & 0x80) &&
             memcmp(registers + 0x10, expected_profile, 80) == 0) registers[4] = 63;
     }
     memcpy(rx, registers + reg, rx_size);
@@ -108,6 +117,8 @@ int main(int argc, char **argv)
     const int original_scenario = scenario;
     registers[0] = 0x0f;
     registers[8] = 0xf0;
+    registers[2] = 0x31;
+    registers[3] = 0x40;
     registers[4] = 0xfe;
     registers[5] = 0xe8;
     registers[0x0b] = 0x14;
@@ -119,12 +130,13 @@ int main(int argc, char **argv)
         if (scenario == 10) registers[8] = 0xf0;
         if (scenario == 12) registers[0x0b] &= 0x7f;
     }
-    const bool should_fail = (scenario >= 1 && scenario <= 7) || scenario == 11 || scenario == 14;
+    const bool should_fail = (scenario >= 1 && scenario <= 7) || scenario == 11 ||
+                             scenario == 14 || scenario == 16;
     esp_err_t result = bsp_battery_init();
     if (should_fail) {
         assert(result != ESP_OK && removals == 1);
         assert(bsp_battery_soc() == -1 && bsp_battery_mv() == -1);
-        if (scenario == 7) {
+        if (scenario == 7 || scenario == 16) {
             assert(result == ESP_ERR_TIMEOUT && soc_attempts == 50);
             assert(elapsed_ms >= 5000 && elapsed_ms < 5200);
         }
@@ -139,6 +151,7 @@ int main(int argc, char **argv)
     if (original_scenario == 0 || original_scenario == 9 || original_scenario == 12)
         assert(profile_writes == 80 && verified_bytes == 80);
     if (original_scenario == 13) assert(soc_attempts == 3);
+    if (original_scenario == 15) assert(soc_attempts == 4);
     assert(memcmp(registers + 0x10, expected_profile, 80) == 0);
     assert(registers[0x0b] == 0x94 && registers[8] == 0);
     unsigned previous_writes = writes;
@@ -157,6 +170,7 @@ int main(int argc, char **argv)
     assert(bsp_battery_soc() == 0);
     registers[2] = 0; registers[3] = 0;
     assert(bsp_battery_mv() == -1);
+    assert(bsp_battery_soc() == -1);
     registers[2] = 0x3f; registers[3] = 0xff;
     assert(bsp_battery_mv() == -1);
     read_failure = true;

@@ -40,7 +40,7 @@ run_static_checks() {
         -Itests/battery_stubs -Icomponents/bsp/include \
         tests/test_bsp_battery.c components/bsp/src/bsp_battery.c \
         -o "${test_dir}/test_bsp_battery"
-    for scenario in {0..14}; do
+    for scenario in {0..16}; do
         "${test_dir}/test_bsp_battery" "${scenario}"
     done
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \

@@ -114,13 +114,15 @@ static int cw_update_profile(void) {
     return cw_enter_active();
 }
 
-// 首次计算期间 SOC 可能大于 100；每 100 ms 检查一次，最多 50 次。
+// 冷启动或深睡唤醒时，CW2017 可能在计算完成前同时报告 0% 和 0 mV。
+// 沿用 FoloToy/ai-passport f1d0f4c 的电压就绪检查。
 // 总等待包含 5 秒延时及各次 I2C 事务耗时，始终在启动任务上下文执行。
 static int cw_wait_soc_ready(void) {
     for (int retry = 0; retry < 50; retry++) {
         uint8_t soc = 0;
         vTaskDelay(pdMS_TO_TICKS(100));
-        if (cw_read(CW_REG_SOC_H, &soc, 1) == 0 && soc <= 100) return 0;
+        if (cw_read(CW_REG_SOC_H, &soc, 1) == 0 && soc <= 100 &&
+            bsp_battery_mv() >= 0) return 0;
     }
     return -1;
 }
@@ -210,6 +212,7 @@ int bsp_battery_soc(void) {
     if (cw_read(CW_REG_SOC_H, b, 2) != 0) return -1;
     int soc = b[0];                       // 高字节即整数百分比
     if (soc > 100) return -1;             // 芯片未就绪时可能读到 0xFF
+    if (soc == 0 && bsp_battery_mv() < 0) return -1;
     return soc;
 }
 

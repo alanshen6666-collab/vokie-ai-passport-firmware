@@ -172,7 +172,7 @@ Initialization uses the stock 520 mAh cell profile published in [FoloToy PR #38]
 
 Initialize serially before UI/audio workers start. Initialization and reads may block and must stay outside button callbacks and the LVGL task. The profile is specific to the standard-production 520 mAh cell; a replacement cell needs its matching vendor-generated profile and renewed charge/discharge validation. This updates only the CW2017 profile registers, not ESP32 NVS, identity, partition layout, or Recovery.
 
-- SOC uses registers `0x04–0x05`; values above 100 are treated as not ready and return `-1`.
+- Initialization requires both a valid SOC and a valid cell voltage. The runtime SOC read uses registers `0x04–0x05`. A value above 100, or 0% with an invalid voltage, returns `-1`.
 - Voltage uses the 14-bit value at `0x02–0x03`, converted as `raw × 312.5 µV`, and returned in mV. Reads outside the datasheet measurement range of 2500–4900 mV return `-1`.
 - Transactions use a 100 ms timeout at 100 kHz.
 - A missing device returns `ESP_ERR_NOT_FOUND`; the status UI continues with `--%`. A gauge absent at initialization is detected again on the next boot.

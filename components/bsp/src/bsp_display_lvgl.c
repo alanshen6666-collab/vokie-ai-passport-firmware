@@ -50,6 +50,7 @@ lv_display_t *bsp_lvgl_init(void) {
 
 bool bsp_lvgl_lock(int timeout_ms) { return lvgl_port_lock(timeout_ms); }
 void bsp_lvgl_unlock(void)         { lvgl_port_unlock(); }
+bool bsp_lvgl_ready(void)          { return s_disp != NULL; }
 
 esp_err_t bsp_lvgl_set_paused(bool paused) {
     if (!s_disp) return ESP_ERR_INVALID_STATE;

@@ -13,6 +13,7 @@
 // 写入/模式校验/等待失败会释放设备句柄，允许之后重试。
 // 芯片不应答时返回 ESP_ERR_NOT_FOUND —— 上层可据此在 UI 上标记该项不可用。
 esp_err_t bsp_battery_init(void);
+esp_err_t bsp_battery_sleep(void);
 
 // 剩余电量百分比 0..100；读取失败、未就绪或无有效 profile 时返回 -1。
 int bsp_battery_soc(void);

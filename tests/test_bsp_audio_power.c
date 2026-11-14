@@ -1,4 +1,5 @@
 #include "bsp_audio.h"
+#include "driver/gpio.h"
 #include "bsp_i2c.h"
 #include "esp_codec_dev.h"
 #include "esp_pm.h"
@@ -11,13 +12,33 @@ static bool first_rx_word, fail_prime;
 static bool fail_open, fail_tx, fail_rx, fail_stop_tx, fail_stop_rx, codec_on;
 static int dac_power, dac_mute;
 static bool fail_mute_write, fail_power_write, fail_register_read;
+static uint8_t suspend_registers[256];
+static bool suspend_pin_configured, fail_suspend_readback;
 
 static bool speaker_off(void) {
     return (dac_mute & 0x60) == 0x60 && (dac_power & 0x02) != 0;
 }
 esp_err_t bsp_i2c_init(void) { return ESP_OK; }
 void *bsp_i2c_bus(void) { return &token; }
-const audio_codec_ctrl_if_t *audio_codec_new_i2c_ctrl(const audio_codec_i2c_cfg_t *c) { (void)c; return &token; }
+static int read_suspend_register(const audio_codec_ctrl_if_t *ctrl, int reg,
+                                 int reg_len, void *data, int data_len) {
+    (void)ctrl;
+    assert(!tx && !rx && !codec_on && reg_len == 1 && data_len == 1);
+    *(uint8_t *)data = fail_suspend_readback ? 0 : suspend_registers[reg];
+    return 0;
+}
+static int write_suspend_register(const audio_codec_ctrl_if_t *ctrl, int reg,
+                                  int reg_len, void *data, int data_len) {
+    (void)ctrl;
+    assert(!tx && !rx && !codec_on && reg_len == 1 && data_len == 1);
+    suspend_registers[reg] = *(const uint8_t *)data;
+    return 0;
+}
+const audio_codec_ctrl_if_t *audio_codec_new_i2c_ctrl(const audio_codec_i2c_cfg_t *c) {
+    (void)c;
+    static const audio_codec_ctrl_if_t ctrl = {read_suspend_register, write_suspend_register};
+    return &ctrl;
+}
 const audio_codec_data_if_t *audio_codec_new_i2s_data(const audio_codec_i2s_cfg_t *c) { (void)c; return &token; }
 void *audio_codec_new_gpio(void) { return &token; }
 const audio_codec_if_t *es8311_codec_new(const es8311_codec_cfg_t *c) { assert(c->no_dac_ref); return &token; }
@@ -70,6 +91,13 @@ int esp_codec_dev_write_reg(esp_codec_dev_handle_t d, int reg, int value) {
     (void)d; assert(reg == 0x12);
     if (fail_power_write) return -1;
     dac_power=value; return 0;
+}
+
+esp_err_t gpio_config(const gpio_config_t *config) {
+    assert(config->mode == GPIO_MODE_INPUT);
+    assert(config->pin_bit_mask == 0x7c && !tx && !rx && !locks);
+    suspend_pin_configured = true;
+    return ESP_OK;
 }
 int esp_codec_dev_read(esp_codec_dev_handle_t d, void *p, int n) {
     (void)d; assert(tx && rx && codec_on && locks == 1);
@@ -195,6 +223,11 @@ int main(void) {
     fail_rx=false;
     assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
     assert(bsp_audio_set_format(8000,16,1) == ESP_OK && locks == 1);
-    assert(bsp_audio_suspend() == ESP_OK); idle();
+    assert(bsp_audio_prepare_deep_sleep() == ESP_OK);
+    assert(suspend_pin_configured && suspend_registers[0x0D] == 0xFC &&
+           suspend_registers[0x45] == 0x01);
+    idle();
+    fail_suspend_readback = true;
+    assert(bsp_audio_prepare_deep_sleep() == ESP_ERR_INVALID_RESPONSE);
     puts("Audio power lifecycle tests: PASS");
 }

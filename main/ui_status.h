@@ -24,3 +24,5 @@ void ui_status_init(void);
 void ui_status_set_state(ui_status_state_t state, const char *message);
 // Non-blocking: wake the display and request one hint, or all three hints.
 void ui_status_touch(ui_status_hint_t hint);
+// Terminal: wait for the status task to finish its last I2C/LVGL operation.
+bool ui_status_quiesce(void);

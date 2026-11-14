@@ -196,6 +196,15 @@ fail:
     return e;
 }
 
+esp_err_t bsp_battery_sleep(void) {
+    if (!s_dev) return ESP_OK;
+    uint8_t mode = 0;
+    if (cw_write(CW_REG_CONFIG, CW_CONFIG_SLEEP) != 0) return ESP_FAIL;
+    vTaskDelay(pdMS_TO_TICKS(5));
+    if (cw_read(CW_REG_CONFIG, &mode, 1) != 0) return ESP_FAIL;
+    return mode == CW_CONFIG_SLEEP ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+}
+
 int bsp_battery_soc(void) {
     uint8_t b[2] = { 0 };
     if (cw_read(CW_REG_SOC_H, b, 2) != 0) return -1;

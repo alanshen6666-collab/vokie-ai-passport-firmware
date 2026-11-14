@@ -36,7 +36,7 @@ The target is the ESP32-C3 FoloToy AI Passport with ESP-IDF 5.5.3. It has 8 MB F
 | Battery | CW2017 fuel gauge | shared I2C0, address `0x63` | Status UI SOC percentage, or measured voltage when SOC is invalid |
 | Wi-Fi | Not used by the current firmware | no Wi-Fi application path | Not compiled into the Vokie application |
 | Bluetooth LE | NimBLE peripheral | Vokie BLE V1 service | Connectable advertising and notifications |
-| Low power | Event-driven idle and automatic light sleep | ESP-IDF PM + BLE modem sleep | Audio/backlight sleep locks; ADC keys scanned every 20 ms; no deep sleep |
+| Low power | Light standby and battery deep sleep | ESP-IDF PM + BLE modem sleep + GPIO wake | 20 ms ADC polling while awake; GPIO0 wakes from deep sleep |
 | Console | USB Serial/JTAG | native USB GPIO18/19 | Configured |
 
 ## 3. Pin map and resource ownership
@@ -160,7 +160,7 @@ The audio worker owns stream open/read/write/pause/suspend. After the boot sound
 
 The UI worker uses event notifications and exact deadlines rather than a 200 ms poll. Identical host state/message updates do not reset the screen timeout. Screen-off pauses LVGL refresh, animation, and the 5 ms port tick; wake restores elapsed LVGL time. The timer handler stays enabled while its timers are paused, avoiding the LVGL 9.5 disabled-handler 1 ms loop. The port task can still wake at its 500 ms maximum interval. The LCD controller is not powered down.
 
-Power management permits 40–160 MHz dynamic scaling and automatic light sleep with tickless idle. BLE modem sleep uses the main crystal, with the main-crystal light-sleep option enabled; an external 32 kHz crystal is not assumed. The backlight uses the XTAL clock and holds a no-light-sleep lock while lit, preventing PWM flicker. ADC keys remain sampled every 20 ms with one debounce tick. The BSP exposes debounced PRESS/RELEASE plus legacy CLICK/DOUBLE/LONG events. Vokie acts on release and ignores delayed CLICK/DOUBLE; OK uses a separate 650 ms timer on ESP_TIMER_TASK to preserve long holds after rapid taps. Button timing and quick taps require board validation. BLE connection parameters are unchanged.
+Power management permits 40–160 MHz dynamic scaling and automatic light sleep with tickless idle. BLE modem sleep keeps the main crystal powered. The lit backlight holds a no-light-sleep lock. ADC keys are sampled every 20 ms, with one debounce tick. Vokie acts on release, and OK uses a separate 650 ms timer for the long press. See the [standby power decision](../development/engineering/standby-power-decision.md) for BLE intervals and deep sleep.
 
 USB Serial/JTAG standby (`main/usb_standby.c`) polls the bus every two seconds and, while a host keeps it active, holds both a no-light-sleep lock and an 80 MHz APB-frequency lock (`CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y` remains as the fast in-driver path). The APB floor keeps BBPLL powered for the USB PHY when dynamic scaling reaches the 40 MHz floor, and a five-second release grace retains the locks over brief SOF gaps. The cause of the earlier isolated disconnect is unconfirmed. A bus that stays silent or unplugged for five seconds permits battery light sleep again. Unplug USB to exercise battery standby; USB logging is not a valid light-sleep current measurement. Host suspend/replug behavior requires separate hardware acceptance.
 

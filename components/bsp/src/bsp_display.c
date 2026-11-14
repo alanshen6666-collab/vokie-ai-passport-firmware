@@ -2,6 +2,7 @@
 // 移植自 trae_card/components/platform/platform_esp32/src/disp_st7789.c
 #include "bsp_display.h"
 #include "bsp_pins.h"
+#include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
@@ -21,6 +22,21 @@ static bool                      s_bl_ready;
 static esp_pm_lock_handle_t       s_backlight_lock;
 static bool                      s_backlight_lock_held;
 #endif
+
+static const gpio_num_t s_panel_hold_pins[] = {
+    BSP_LCD_CS, BSP_LCD_DC, BSP_LCD_BL,
+};
+
+static esp_err_t display_set_safe_levels(void) {
+    for (size_t i = 0; i < sizeof(s_panel_hold_pins) / sizeof(s_panel_hold_pins[0]); ++i) {
+        const gpio_num_t pin = s_panel_hold_pins[i];
+        esp_err_t err = gpio_reset_pin(pin);
+        if (err == ESP_OK) err = gpio_set_level(pin, pin == BSP_LCD_CS);
+        if (err == ESP_OK) err = gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+        if (err != ESP_OK) return err;
+    }
+    return ESP_OK;
+}
 
 // ---------------------------------------------------------------------------
 // ST7789P3 厂商专属初始化序列(porch / power / gamma)。
@@ -92,13 +108,20 @@ static void backlight_init(void) {
 esp_err_t bsp_display_init(void) {
     if (s_panel) return ESP_OK;
 
+    gpio_deep_sleep_hold_dis();
+    esp_err_t e = display_set_safe_levels();
+    if (e != ESP_OK) return e;
+    for (size_t i = 0; i < sizeof(s_panel_hold_pins) / sizeof(s_panel_hold_pins[0]); ++i) {
+        e = gpio_hold_dis(s_panel_hold_pins[i]);
+        if (e != ESP_OK) return e;
+    }
     spi_bus_config_t bus = {
         .mosi_io_num = BSP_LCD_MOSI,
         .sclk_io_num = BSP_LCD_SCLK,
         .miso_io_num = -1, .quadwp_io_num = -1, .quadhd_io_num = -1,
         .max_transfer_sz = BSP_LCD_W * 80 * 2,
     };
-    esp_err_t e = spi_bus_initialize(BSP_LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
+    e = spi_bus_initialize(BSP_LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "SPI 总线初始化失败 (%s) —— 检查 MOSI=GPIO%d / SCLK=GPIO%d 是否冲突",
                  esp_err_to_name(e), BSP_LCD_MOSI, BSP_LCD_SCLK);
@@ -147,6 +170,34 @@ esp_err_t bsp_display_init(void) {
 esp_lcd_panel_handle_t bsp_display_panel(void) { return s_panel; }
 
 esp_lcd_panel_io_handle_t bsp_display_io(void) { return s_io; }
+
+esp_err_t bsp_display_prepare_deep_sleep(void) {
+    if (!s_panel) return ESP_OK;
+    bsp_display_backlight(0);
+    esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, false);
+    if (err == ESP_OK) err = esp_lcd_panel_disp_sleep(s_panel, true);
+    if (s_bl_ready) {
+        esp_err_t backlight_err = ledc_stop(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, 0);
+        if (err == ESP_OK) err = backlight_err;
+    }
+    esp_err_t pins_err = display_set_safe_levels();
+    if (pins_err != ESP_OK) return pins_err;
+    // CS stays high. Return the unused SPI signals to inputs so GPIO8/GPIO9
+    // can take their boot-strapping levels when the chip wakes.
+    const gpio_config_t spi_inputs = {
+        .pin_bit_mask = (1ULL << BSP_LCD_SCLK) | (1ULL << BSP_LCD_MOSI),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    pins_err = gpio_config(&spi_inputs);
+    if (pins_err != ESP_OK) return pins_err;
+    for (size_t i = 0; i < sizeof(s_panel_hold_pins) / sizeof(s_panel_hold_pins[0]); ++i) {
+        pins_err = gpio_hold_en(s_panel_hold_pins[i]);
+        if (pins_err != ESP_OK) return pins_err;
+    }
+    gpio_deep_sleep_hold_en();
+    return err;
+}
 
 void bsp_display_backlight(uint8_t percent) {
     if (!s_bl_ready) return;

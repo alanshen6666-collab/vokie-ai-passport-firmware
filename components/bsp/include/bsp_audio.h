@@ -28,6 +28,9 @@ esp_err_t bsp_audio_pause(void);
 // Idempotent. The audio worker must serialize this with all PCM I/O.
 esp_err_t bsp_audio_suspend(void);
 
+// Audio worker only. Power down the codec and release the I2S pins for reset.
+esp_err_t bsp_audio_prepare_deep_sleep(void);
+
 // The first mono 16-bit read after I2S restart primes one partial slot word
 // (62.5 us at 16 kHz), then returns the full requested PCM frame.
 // 播放 / 录音。bytes 为字节数(16bit 单声道时 = 采样数 x 2)。

@@ -20,6 +20,9 @@ esp_lcd_panel_io_handle_t bsp_display_io(void);
 // 背光亮度 0..100(%)。LEDC PWM,0=全灭。
 void bsp_display_backlight(uint8_t percent);
 
+// Drain SPI before putting the panel to sleep. Hold the LVGL lock if active.
+esp_err_t bsp_display_prepare_deep_sleep(void);
+
 // ---------------------------------------------------------------------------
 // LVGL 接入(可选层)。必须先 bsp_display_init() 成功后再调。
 // 不想用 LVGL 的开发者可忽略本段,直接用 bsp_display_panel() 自己画。
@@ -30,6 +33,7 @@ struct _lv_display_t;
 
 // 启动 LVGL 与其渲染任务,返回 lv_display_t*。失败返回 NULL。
 struct _lv_display_t *bsp_lvgl_init(void);
+bool bsp_lvgl_ready(void);
 
 // LVGL 非线程安全:在【非 LVGL 任务】里操作任何 lv_* 对象前后必须加解锁。
 bool bsp_lvgl_lock(int timeout_ms);

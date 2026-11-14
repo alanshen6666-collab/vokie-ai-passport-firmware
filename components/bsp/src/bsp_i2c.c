@@ -1,6 +1,7 @@
 // components/bsp/src/bsp_i2c.c
 #include "bsp_i2c.h"
 #include "bsp_pins.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 
 static const char *TAG = "bsp_i2c";
@@ -29,6 +30,14 @@ esp_err_t bsp_i2c_init(void) {
 }
 
 i2c_master_bus_handle_t bsp_i2c_bus(void) { return s_bus; }
+
+esp_err_t bsp_i2c_prepare_deep_sleep(void) {
+    const gpio_config_t config = {
+        .pin_bit_mask = (1ULL << BSP_I2C_SDA) | (1ULL << BSP_I2C_SCL),
+        .mode = GPIO_MODE_INPUT,
+    };
+    return gpio_config(&config);
+}
 
 esp_err_t bsp_i2c_scan(void) {
     // ⚠ 千万别为了"隔离 NACK"另开一条临时总线扫描 —— 那会把整条 I2C 打死:

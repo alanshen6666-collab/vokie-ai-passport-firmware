@@ -19,7 +19,7 @@ static esp_timer_handle_t s_timer;
 static esp_pm_lock_handle_t s_sleep_lock;
 static esp_pm_lock_handle_t s_freq_lock;
 static usb_standby_t s_policy;
-static bool s_locks_held;
+static volatile bool s_locks_held;
 
 static void on_poll(void *arg)
 {
@@ -45,6 +45,15 @@ static void on_poll(void *arg)
     s_locks_held = held;
 }
 #endif
+
+bool usb_standby_console_active(void)
+{
+#if CONFIG_PM_ENABLE
+    return s_locks_held || usb_serial_jtag_is_connected();
+#else
+    return usb_serial_jtag_is_connected();
+#endif
+}
 
 void usb_standby_init(void)
 {

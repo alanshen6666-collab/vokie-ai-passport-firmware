@@ -38,7 +38,7 @@ AI 应先完成以下检查：
 | 电池 | CW2017 电量计 | 共享 I2C0，地址 0x63 | 状态界面显示电量百分比，SOC 无效时显示实测电压 |
 | Wi-Fi | 当前固件不使用 | 没有 Wi-Fi 应用链路 | 未编译进 Vokie 应用 |
 | Bluetooth LE | NimBLE 外设 | Vokie BLE V1 服务 | 可连接广播与 Notification |
-| 低功耗 | 事件驱动闲置与自动轻睡眠 | ESP-IDF PM + BLE Modem-sleep | 音频/背光睡眠锁；ADC 三键每 20 ms 扫描；无深睡眠 |
+| 低功耗 | 浅睡待机与电池深睡 | ESP-IDF PM、BLE Modem-sleep 和 GPIO 唤醒 | 运行时每 20 ms 扫描 ADC 按键，GPIO0 从深睡唤醒 |
 | 日志 | USB Serial/JTAG | 原生 USB GPIO18/19 | 已配置 |
 
 ## 3. 引脚表与资源所有权
@@ -209,7 +209,7 @@ Vokie 音频任务在任务栈上使用一个 320-sample PCM 缓冲和一个 166
 
 UI 任务按事件通知和准确到期时间运行，替代 200 ms 轮询。相同的主机状态/消息不重置屏幕超时。熄屏暂停 LVGL 刷新、动画和 5 ms port tick；唤醒补回 LVGL 流逝时间。暂停各定时器时保持定时器处理器启用，避免 LVGL 9.5 在处理器禁用时每 1 ms 空转。port 任务仍可能按最长 500 ms 间隔唤醒。LCD 控制器不下电。
 
-电源管理允许 40–160 MHz 动态调频和 tickless idle 自动轻睡眠。BLE Modem-sleep 使用主晶振，并开启轻睡眠期间主晶振供电选项，不假定存在外部 32 kHz 晶振。背光使用 XTAL 时钟，亮屏时持有禁止轻睡眠锁，避免 PWM 闪烁。ADC 三键保留每 20 ms 扫描，去抖为一个扫描周期；按键时序和快速短按仍需真机验证。BLE 连接参数不变。
+电源管理允许 40–160 MHz 动态调频和 tickless idle 自动轻睡眠。BLE Modem-sleep 保持主晶振供电，亮屏时背光持有禁止轻睡眠锁。ADC 三键每 20 ms 扫描一次，去抖为一个扫描周期。Vokie 在松手时执行短按，OK 使用独立的 650 ms 长按定时器。蓝牙间隔和深睡行为见[待机功耗决策](../development/engineering/standby-power-decision.zh_CN.md)。
 
 USB Serial/JTAG 待机（`main/usb_standby.c`）每 2 秒轮询总线状态；主机保持总线活跃期间同时持有禁止轻睡眠锁和 80 MHz APB 频率锁（`CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y` 仍作为驱动内快速路径保留）。APB 下限在动态调频降至 40 MHz 时保持 BBPLL 供电，从而保住 USB PHY 时钟；5 秒释放宽限在短暂 SOF 间隙期间保留锁。此前孤立断连的原因尚未确认。总线持续静默或拔线 5 秒后重新允许电池轻睡眠。拔掉 USB 才能测试电池待机；连接 USB 读日志不能作为轻睡眠电流测量。主机挂起及重插行为须独立完成硬件验收。
 

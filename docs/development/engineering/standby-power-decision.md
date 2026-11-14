@@ -10,9 +10,9 @@ Replace the backlight-only standby policy with idle I2S pause, event-driven UI w
 
 ## Alternatives and risks
 
-Deep sleep would disconnect BLE and change wake behavior; it is excluded. GPIO wake for the ADC ladder requires board measurements and is excluded. Keep periodic ADC scanning at 20 ms with debounce retuned to preserve the original 10 ms qualification period as closely as this scan allows (one sample period). Keep 160 MHz available for work and use 40 MHz when idle. Use the main crystal for BLE sleep; do not assume an external 32 kHz crystal.
+Keep 20 ms ADC scanning and the main crystal during light sleep. After 20 seconds of inactivity, request a 90–120 ms connection interval. The central negotiates the final value. Restore the 15 ms audio link before starting a capture from the slow link. On battery, 15 minutes of inactivity triggers deep sleep, which ends the BLE connection. GPIO0 wakes the device on a function-key press after the ADC releases the pad. Wake boots the application and advertises again.
 
-Fully powering down and reopening ES8311 repeats a clipped startup transient at recording start on the tested board. Retain codec bias/filter state during idle and stop only I2S/DMA; this avoids resetting the ADC and avoids dropping the first part of each recording as a settling delay. Prime one partial I2S slot word at the first 16-bit mono read after restart (62.5 us at 16 kHz) so it cannot seed the ADPCM predictor. Hold the audio no-light-sleep lock only while I2S is active, and keep the backlight lock while lit. This preserves residual codec analog current. LCD controller power and BLE connection parameters remain unchanged. Net current savings, battery light-sleep audio recovery, and wake latency require device measurements.
+Fully powering down and reopening ES8311 repeats a clipped startup transient at recording start on the tested board. Retain codec bias and filter state during light standby while pausing I2S/DMA. Prime one partial I2S slot word at the first 16-bit mono read after restart (62.5 µs at 16 kHz). During deep sleep, suspend the codec, display and fuel gauge. Current, first audio after GPIO wake and reconnection latency require device measurements.
 
 ## Acceptance
 

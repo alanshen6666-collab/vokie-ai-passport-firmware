@@ -51,7 +51,9 @@
 //   逐个按住三个键记下读数,取相邻两档的中点作为窗口边界,改下面的 BSP_BTN_MV 即可。
 // ============================================================================
 #define BSP_BTN_ADC_UNIT     ADC_UNIT_1
-#define BSP_BTN_ADC_CHANNEL  ADC_CHANNEL_0    // GPIO0
+#define BSP_BTN_ADC_CHANNEL  ADC_CHANNEL_0
+#define BSP_BTN_GPIO         0                // Shared ADC pad and active-low wake source.
+#define BSP_BTN_RELEASE_MIN_MV 2000
 #define BSP_BTN_COUNT        3
 
 // 每键的电压窗口 {min_mV, max_mV};边界取相邻档中点。

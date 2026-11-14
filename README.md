@@ -32,7 +32,7 @@ text insertion.
 - Independent 20 ms IMA ADPCM frames transported over BLE notifications.
 - Host-controlled `READY`, `THINKING`, `SENT`, and error status display.
 - Physical controls for send, delete, clear, and cancellation.
-- Screen-off standby closes idle audio, pauses UI timers, and permits automatic light sleep while keeping BLE available.
+- After 20 seconds idle, the screen turns off and the device requests a 90–120 ms BLE connection interval. It restores the fast link before capture. On battery, 15 minutes idle triggers deep sleep. Tap a function key to wake, wait for Vokie to show Ready, then tap UP to record.
 - Three-stage backlight policy: 65% active, 18% after 3 seconds, off after
   20 seconds; processing uses 38%.
 - Preserves the upstream protected device-identity and permanent-Recovery

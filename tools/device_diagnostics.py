@@ -58,7 +58,8 @@ def details(kind: int, args: list[int]) -> dict:
                  'task_watchdog', 'watchdog', 'deep_sleep', 'brownout', 'sdio', 'usb',
                  'jtag', 'efuse', 'power_glitch', 'cpu_lockup']
         return {'reset_reason': names[a[0]] if a[0] < len(names) else f'unknown_{a[0]}',
-                'free_heap': a[1], 'minimum_free_heap': a[2], 'capacity_records': a[4]}
+                'free_heap': a[1], 'minimum_free_heap': a[2], 'capacity_records': a[4],
+                'wake_cause': a[5], 'wake_gpio_mask': a[6]}
     if kind == 2:
         return {'elf_sha256': struct.pack('<8I', *a).hex()}
     if kind in (32, 45, 46, 47):

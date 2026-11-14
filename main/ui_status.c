@@ -62,6 +62,7 @@ static uint8_t s_backlight_level;
 static bool s_hints_visible;
 static ui_status_hint_t s_displayed_hints;
 static TaskHandle_t s_task;
+static TaskHandle_t volatile s_sleep_waiter;
 
 // LVGL retains these arrays. Startup keeps all three original guide paths;
 // a single hint starts at the SEND row and points to its physical key.
@@ -268,6 +269,12 @@ static void status_task(void *arg)
     uint32_t rendered_revision = 0;
     ui_status_hint_t rendered_hints = UI_STATUS_HINT_NONE;
     for (;;) {
+        if (s_sleep_waiter) {
+            TaskHandle_t waiter = s_sleep_waiter;
+            s_sleep_waiter = NULL;
+            xTaskNotifyGive(waiter);
+            vTaskSuspend(NULL);
+        }
         const ui_idle_t state = snapshot();
         const int64_t now_us = esp_timer_get_time();
         const uint8_t brightness = ui_idle_brightness(&state, now_us);
@@ -325,6 +332,21 @@ static void status_task(void *arg)
         // Pending notifications wake immediately, including during I2C work.
         ulTaskNotifyTake(pdTRUE, ticks ? ticks : 1);
     }
+}
+
+bool ui_status_quiesce(void)
+{
+    if (!s_task) return true;
+    s_sleep_waiter = xTaskGetCurrentTaskHandle();
+    xTaskNotifyGive(s_task);
+    const TickType_t start = xTaskGetTickCount();
+    const TickType_t timeout = pdMS_TO_TICKS(2000);
+    while (s_sleep_waiter) {
+        const TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= timeout) return false;
+        ulTaskNotifyTake(pdTRUE, timeout - elapsed);
+    }
+    return true;
 }
 
 void ui_status_init(void)

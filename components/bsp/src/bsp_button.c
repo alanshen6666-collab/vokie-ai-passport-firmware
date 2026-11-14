@@ -7,6 +7,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "driver/gpio.h"
+#include "esp_sleep.h"
 #include "esp_log.h"
 
 static const char *TAG = "bsp_btn";
@@ -16,6 +18,7 @@ static const uint16_t BTN_MV[BSP_BTN_COUNT][2] = BSP_BTN_MV_TABLE;
 static button_handle_t s_btn[BSP_BTN_COUNT];
 static bsp_btn_cb_t    s_cb;
 static void           *s_user;
+static bool            s_ignore_wake_press;
 
 // ADC1 是 unit 级独占资源:iot_button 与 bsp_button_read_mv() 必须共用同一个 oneshot
 // 句柄。谁第二个调 adc_oneshot_new_unit() 谁就拿到 "adc1 is already in use"。
@@ -31,6 +34,13 @@ static adc_cali_handle_t         s_cali;
 static void on_event(void *arg, void *usr_data, bsp_btn_ev_t ev) {
     (void)arg;
     if (!s_cb) return;
+    if (s_ignore_wake_press) {
+        if (ev == BSP_BTN_RELEASE) {
+            const int mv = bsp_button_read_mv();
+            if (mv < 0 || mv >= BSP_BTN_RELEASE_MIN_MV) s_ignore_wake_press = false;
+        }
+        return;
+    }
     s_cb((bsp_btn_t)(intptr_t)usr_data, ev, s_user);
 }
 static void cb_press (void *a, void *u) { on_event(a, u, BSP_BTN_PRESS);  }
@@ -40,7 +50,12 @@ static void cb_double(void *a, void *u) { on_event(a, u, BSP_BTN_DOUBLE); }
 static void cb_long  (void *a, void *u) { on_event(a, u, BSP_BTN_LONG);   }
 
 esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
-    s_cb = cb; s_user = user;
+    // ESP-IDF holds the wake pad during deep sleep.
+    const bool gpio_wake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
+    const bool wake_key_held = gpio_wake && gpio_get_level(BSP_BTN_GPIO) == 0;
+    esp_err_t err = gpio_hold_dis(BSP_BTN_GPIO);
+    if (err != ESP_OK) return err;
+    s_user = user;
 
     // 先由 BSP 建 unit,再把句柄交给 button 组件(button_adc.h:adc_handle 非 NULL 即复用),
     // 这样本文件的 bsp_button_read_mv() 也能读同一路 ADC。
@@ -89,6 +104,11 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
         s_cali = NULL;
     }
 
+    if (gpio_wake) {
+        const int mv = bsp_button_read_mv();
+        s_ignore_wake_press = mv < 0 ? wake_key_held : mv < BSP_BTN_RELEASE_MIN_MV;
+    }
+    s_cb = cb;
     ESP_LOGI(TAG, "按键就绪:ADC1_CH%d 三键分压", BSP_BTN_ADC_CHANNEL);
     return ESP_OK;
 }
@@ -102,4 +122,40 @@ int bsp_button_read_mv(void) {
     if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raw) != ESP_OK) return -1;
     if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return -1;
     return mv;
+}
+
+esp_err_t bsp_button_prepare_deep_sleep(void) {
+    // Stop their shared timer before deleting anything it can still traverse.
+    esp_err_t stop_err = iot_button_stop();
+    if (stop_err != ESP_OK) return stop_err;
+    for (int i = 0; i < BSP_BTN_COUNT; i++) {
+        if (!s_btn[i]) continue;
+        esp_err_t err = iot_button_delete(s_btn[i]);
+        if (err != ESP_OK) return err;
+        s_btn[i] = NULL;
+    }
+    if (s_cali) {
+        esp_err_t err = adc_cali_delete_scheme_curve_fitting(s_cali);
+        if (err != ESP_OK) return err;
+        s_cali = NULL;
+    }
+    if (s_adc) {
+        esp_err_t err = adc_oneshot_del_unit(s_adc);
+        if (err != ESP_OK) return err;
+        s_adc = NULL;
+    }
+    // Restore the digital receiver before arming active-low wake. The pull-up
+    // here is only for deep sleep; ADC initialization restores the ladder.
+    const gpio_config_t config = {
+        .pin_bit_mask = 1ULL << BSP_BTN_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    esp_err_t err = gpio_config(&config);
+    if (err == ESP_OK) err = gpio_sleep_set_direction(BSP_BTN_GPIO, GPIO_MODE_INPUT);
+    if (err == ESP_OK) err = gpio_sleep_set_pull_mode(BSP_BTN_GPIO, GPIO_PULLUP_ONLY);
+    if (err == ESP_OK) err = gpio_sleep_sel_dis(BSP_BTN_GPIO);
+    return err;
 }

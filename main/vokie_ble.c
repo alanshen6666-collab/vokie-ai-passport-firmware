@@ -1,6 +1,10 @@
 #include "vokie_ble.h"
 
 #include "bsp_audio.h"
+#include "bsp_battery.h"
+#include "bsp_display.h"
+#include "bsp_i2c.h"
+#include "bsp_pins.h"
 #include "boot_sound.h"
 #include "ui_status.h"
 #include "bsp_button.h"
@@ -9,7 +13,13 @@
 #include "ble_capture_end.h"
 #include "ble_audio_mbuf.h"
 #include "device_diag.h"
+#include "standby_policy.h"
+#include "ui_idle.h"
+#include "usb_standby.h"
+#include "driver/gpio.h"
 #include "esp_timer.h"
+#include "esp_sleep.h"
+#include "esp_pm.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -44,6 +54,9 @@ static const uint16_t NO_CONN = BLE_HS_CONN_HANDLE_NONE;
 #define AUDIO_TX_TIMEOUT_MS 80
 #define CONTROL_TX_TIMEOUT_MS 200
 #define TX_RETRY_INTERVAL_MS 5
+#define AUDIO_LINK_TIMEOUT_MS 1500
+#define LINK_RETRY_MS 250
+#define SLEEP_RECHECK_MS 5000
 #define SERVICE_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x01,0x00,0x0e,0x7f
 #define CONTROL_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x02,0x00,0x0e,0x7f
 #define AUDIO_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x03,0x00,0x0e,0x7f
@@ -74,7 +87,13 @@ static button_gesture_t s_button_gestures[3];
 static esp_timer_handle_t s_ok_hold_timer;
 static volatile uint32_t s_connection_epoch = 1;
 static bool s_hello_sent;
-static bool s_link_parameters_requested;
+static volatile uint32_t s_link_update_count;
+static volatile uint32_t s_last_activity_ms;
+static volatile bool s_entering_sleep;
+static portMUX_TYPE s_sleep_lock = portMUX_INITIALIZER_UNLOCKED;
+#if CONFIG_PM_ENABLE
+static esp_pm_lock_handle_t s_deep_sleep_lock;
+#endif
 static uint32_t s_tx_retries;
 static volatile uint32_t s_stop_reason;
 static volatile uint32_t s_queued_frames;
@@ -319,23 +338,154 @@ static void log_link(const char *event)
     }
 }
 
-static void request_audio_link(void)
+static int request_link(uint16_t conn, bool idle)
 {
-    if (s_link_parameters_requested || s_conn == NO_CONN) return;
-    s_link_parameters_requested = true;
     const struct ble_gap_upd_params params = {
-        .itvl_min = 12, .itvl_max = 12, .latency = 0,
-        .supervision_timeout = 400, .min_ce_len = 0, .max_ce_len = 0,
+        .itvl_min = idle ? VOKIE_IDLE_INTERVAL_MIN : VOKIE_AUDIO_INTERVAL,
+        .itvl_max = idle ? VOKIE_IDLE_INTERVAL_MAX : VOKIE_AUDIO_INTERVAL,
+        .latency = 0, .supervision_timeout = VOKIE_LINK_SUPERVISION_TIMEOUT,
     };
-    // Request 15 ms explicitly: the previous 15-30 ms range let Windows keep
-    // 30 ms, which exhausted TX buffers with a 20 ms audio cadence on this host.
-    // The central retains final control; always log the negotiated interval.
-    int rc = ble_gap_update_params(s_conn, &params);
-    device_diag_emit(DD_LINK_REQUEST, s_session, 1, rc, s_conn, 15000, 15000, s_connection_epoch, 0, 0);
-    ESP_LOGI(TAG, "Audio link parameter request rc=%d target_interval_us=15000", rc);
-    rc = ble_gap_set_data_len(s_conn, 251, 2120);
+    int rc = ble_gap_update_params(conn, &params);
+    device_diag_emit(DD_LINK_REQUEST, s_session, idle ? 4 : 1, rc, conn,
+                     params.itvl_min * 1250u, params.itvl_max * 1250u, s_connection_epoch, 0, 0);
+    ESP_LOGI(TAG, "%s link request rc=%d interval=%u-%u ms",
+             idle ? "Idle" : "Audio", rc, params.itvl_min * 5u / 4u, params.itvl_max * 5u / 4u);
+    return rc;
+}
+
+static void request_long_packets(void)
+{
+    int rc = ble_gap_set_data_len(s_conn, 251, 2120);
     device_diag_emit(DD_LINK_REQUEST, s_session, 2, rc, s_conn, 251, 2120, s_connection_epoch, 0, 0);
     ESP_LOGI(TAG, "Audio link data length request rc=%d tx_octets=251", rc);
+}
+
+static bool link_matches(uint16_t conn, bool idle)
+{
+    struct ble_gap_conn_desc desc;
+    return ble_gap_conn_find(conn, &desc) == 0 &&
+           vokie_link_matches(idle, desc.conn_itvl, desc.conn_latency);
+}
+
+static bool prepare_audio_link(uint32_t session, uint32_t epoch, bool slowed, uint32_t idle_update)
+{
+    // If we requested a slow link, an apparently fast reading may precede
+    // completion of that request. Wait for the update before trusting it.
+    if (!slowed) {
+        if (!link_matches(s_conn, false)) (void)request_link(s_conn, false);
+        return true;
+    }
+    uint32_t start = tx_now_ms(NULL);
+    uint32_t last_request = start - LINK_RETRY_MS;
+    bool pending = false;
+    bool idle_pending = idle_update == s_link_update_count;
+    uint32_t requested_at_update = 0;
+    do {
+        if (!s_recording || session != s_session || epoch != s_connection_epoch) return false;
+        const uint16_t conn = s_conn;
+        if (conn == NO_CONN) return false;
+        if (pending && requested_at_update != s_link_update_count) pending = false;
+        if (idle_pending && idle_update != s_link_update_count) idle_pending = false;
+        if (!pending && !idle_pending && link_matches(conn, false)) return true;
+        const uint32_t now = tx_now_ms(NULL);
+        if (!pending && now - last_request >= LINK_RETRY_MS) {
+            last_request = now;
+            requested_at_update = s_link_update_count;
+            const int rc = request_link(conn, false);
+            // EALREADY can be an earlier idle or central-initiated request.
+            if (rc == 0) {
+                idle_pending = false;
+                pending = true;
+            }
+        }
+        tx_wait_ms(NULL, 20);
+    } while (tx_now_ms(NULL) - start < AUDIO_LINK_TIMEOUT_MS);
+    return false;
+}
+
+static bool voice_busy(void)
+{
+    return s_recording || s_stop_requested || s_result_pending || s_finishing;
+}
+
+static void note_activity(void)
+{
+    s_last_activity_ms = tx_now_ms(NULL);
+    if (s_audio_task) xTaskNotifyGive(s_audio_task);
+}
+
+static bool accept_host_activity(bool activity)
+{
+    taskENTER_CRITICAL(&s_sleep_lock);
+    const bool accepted = !s_entering_sleep;
+    if (accepted && activity) s_last_activity_ms = tx_now_ms(NULL);
+    taskEXIT_CRITICAL(&s_sleep_lock);
+    return accepted;
+}
+
+static void log_sleep_error(const char *step, esp_err_t err)
+{
+    if (err != ESP_OK) ESP_LOGW(TAG, "Deep sleep %s: %s", step, esp_err_to_name(err));
+}
+
+static void try_deep_sleep(uint32_t now)
+{
+    if (bsp_button_read_mv() < BSP_BTN_RELEASE_MIN_MV) return;
+    if (!esp_sleep_is_valid_wakeup_gpio(BSP_BTN_GPIO)) {
+        ESP_LOGW(TAG, "GPIO%d cannot wake from deep sleep", BSP_BTN_GPIO);
+        s_last_activity_ms = now;
+        return;
+    }
+#if CONFIG_PM_ENABLE
+    // Keep tickless idle from setting another timer wakeup during teardown.
+    esp_err_t lock_err = esp_pm_lock_acquire(s_deep_sleep_lock);
+    if (lock_err != ESP_OK) {
+        log_sleep_error("prevent automatic light sleep", lock_err);
+        return;
+    }
+#endif
+    // Recheck after the ADC read, then fence new input before teardown.
+    const bool usb_active = usb_standby_console_active();
+    taskENTER_CRITICAL(&s_sleep_lock);
+    const uint32_t checked_now = tx_now_ms(NULL);
+    s_entering_sleep = vokie_deep_sleep_due(checked_now, s_last_activity_ms,
+                                            voice_busy(), usb_active);
+    taskEXIT_CRITICAL(&s_sleep_lock);
+    if (!s_entering_sleep) {
+#if CONFIG_PM_ENABLE
+        esp_pm_lock_release(s_deep_sleep_lock);
+#endif
+        return;
+    }
+
+    // From here the hand-offs are terminal. Reboot if an input/USB attach
+    // races shutdown or the board cannot safely arm the wake pad.
+    esp_timer_stop(s_ok_hold_timer);
+    if (nimble_port_stop() != 0 || nimble_port_deinit() != ESP_OK ||
+        !ui_status_quiesce() || bsp_button_prepare_deep_sleep() != ESP_OK) {
+        ESP_LOGW(TAG, "Deep sleep teardown failed; restarting");
+        esp_restart();
+    }
+    log_sleep_error("battery gauge", bsp_battery_sleep());
+    log_sleep_error("audio", bsp_audio_prepare_deep_sleep());
+    log_sleep_error("I2C", bsp_i2c_prepare_deep_sleep());
+    if (bsp_lvgl_ready() && !bsp_lvgl_lock(1000)) esp_restart();
+    log_sleep_error("display", bsp_display_prepare_deep_sleep());
+    if (gpio_get_level(BSP_BTN_GPIO) == 0 || usb_standby_console_active()) esp_restart();
+    // ESP-IDF uses the same wake configuration for light and deep sleep.
+    // Drop the RTC timer left behind by tickless idle before arming GPIO0.
+    esp_err_t err = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    if (err == ESP_OK) {
+        err = esp_deep_sleep_enable_gpio_wakeup(1ULL << BSP_BTN_GPIO,
+                                               ESP_GPIO_WAKEUP_GPIO_LOW);
+    }
+    if (err != ESP_OK) {
+        log_sleep_error("wake configuration", err);
+        esp_restart();
+    }
+    ESP_LOGI(TAG, "Entering deep sleep; GPIO%d wakes on a key press", BSP_BTN_GPIO);
+    log_sleep_error("entry", esp_deep_sleep_try_to_start());
+    esp_restart();
 }
 
 typedef struct {
@@ -465,7 +615,7 @@ static void audio_task(void *arg)
     // Runs once per boot, outside button/LVGL callbacks. Keep the existing
     // microphone format and prioritize a voice request over the startup sound.
     esp_err_t boot_err = bsp_audio_set_format(16000, 16, 1);
-    if (boot_err == ESP_OK) {
+    if (boot_err == ESP_OK && esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_GPIO) {
         boot_err = boot_sound_play(boot_pcm_start,
                                   boot_pcm_end - boot_pcm_start,
                                   boot_recording_requested);
@@ -485,7 +635,14 @@ static void audio_task(void *arg)
     bool end_logged = false;
     uint32_t idle_pause_failures = 0, idle_error_ms = 0;
     bool capturing = false;
+    uint32_t link_epoch = 0, idle_update = 0;
+    bool idle_attempted = false, slowed = false, active_requested = false;
+    bool audio_paused = false;
     for (;;) {
+        if (link_epoch != s_connection_epoch) {
+            link_epoch = s_connection_epoch;
+            idle_attempted = slowed = active_requested = false;
+        }
         if (!s_recording) {
             if (capturing && !end_logged) {
                 device_diag_emit(DD_CAPTURE_ABORT, capture_session, s_stop_reason, sequence,
@@ -500,7 +657,7 @@ static void audio_task(void *arg)
             // A capture request that arrives during the retry is picked up by
             // the loop condition, so no notification is lost.
             const int64_t idle_pause_start = esp_timer_get_time();
-            const esp_err_t idle_pause_rc = bsp_audio_pause();
+            const esp_err_t idle_pause_rc = audio_paused ? ESP_OK : bsp_audio_pause();
             if (idle_pause_rc != ESP_OK) {
                 ++idle_pause_failures;
                 if (idle_pause_failures == 1 || tx_now_ms(NULL) - idle_error_ms >= 10000) {
@@ -513,13 +670,50 @@ static void audio_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
+            audio_paused = true;
             idle_pause_failures = 0;
             device_diag_audio_idle();
+            const uint32_t activity = s_last_activity_ms;
+            const uint32_t now = tx_now_ms(NULL);
+            const uint32_t elapsed = now - activity;
+            const uint32_t idle_ms = UI_OFF_TIMEOUT_US / 1000;
+            uint32_t wait_ms = portMAX_DELAY;
+            const uint16_t conn = s_conn;
+            if (!voice_busy()) {
+                if (elapsed >= idle_ms) {
+                    if (host_is_ready() && !idle_attempted) {
+                        idle_update = s_link_update_count;
+                        const int rc = request_link(conn, true);
+                        if (rc == BLE_HS_EALREADY) wait_ms = LINK_RETRY_MS;
+                        idle_attempted = rc != BLE_HS_EALREADY;
+                        if (rc == 0) slowed = true;
+                    }
+                    if (vokie_deep_sleep_due(now, activity, voice_busy(),
+                                             usb_standby_console_active())) {
+                        try_deep_sleep(now);
+                    }
+                    if (elapsed >= VOKIE_DEEP_SLEEP_IDLE_MS && wait_ms > SLEEP_RECHECK_MS) {
+                        wait_ms = SLEEP_RECHECK_MS;
+                    }
+                } else {
+                    wait_ms = idle_ms - elapsed;
+                    idle_attempted = false;
+                    if (host_is_ready() && !active_requested && !slowed) {
+                        active_requested = true;
+                        if (!link_matches(conn, false)) (void)request_link(conn, false);
+                    }
+                }
+            }
+            if (!voice_busy() && elapsed < VOKIE_DEEP_SLEEP_IDLE_MS &&
+                VOKIE_DEEP_SLEEP_IDLE_MS - elapsed < wait_ms) {
+                wait_ms = VOKIE_DEEP_SLEEP_IDLE_MS - elapsed;
+            }
             // A request during pause leaves a pending notification. Do not
             // clear notifications separately from this atomic wait.
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            ulTaskNotifyTake(pdTRUE, wait_ms == portMAX_DELAY ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms));
             continue;
         }
+        audio_paused = false;
         if (!capturing || capture_session != s_session || capture_epoch != s_connection_epoch) {
             if (capturing && !end_logged) {
                 device_diag_emit(DD_CAPTURE_ABORT, capture_session, DD_REASON_SESSION_CHANGED,
@@ -527,7 +721,6 @@ static void audio_task(void *arg)
                                  s_session, diagnostic_flags(), tx_now_ms(NULL) - capture_ms);
                 diagnostic_stats(capture_session, sequence, max_read_us, max_tx_ms, max_gap_ms);
             }
-            device_diag_audio_enter();
             capture_session = s_session;
             capture_epoch = s_connection_epoch;
             sequence = 0;
@@ -537,6 +730,25 @@ static void audio_task(void *arg)
             s_queued_frames = 0;
             max_read_us = 0; max_tx_ms = 0; max_gap_ms = 0;
             capture_ms = tx_now_ms(NULL); last_frame_ms = capture_ms; diag_ms = capture_ms;
+            const bool link_ready = prepare_audio_link(capture_session, capture_epoch, slowed, idle_update);
+            audio_paused = false;
+            slowed = !link_ready;
+            idle_attempted = false;
+            active_requested = link_ready;
+            if (!link_ready) {
+                if (s_recording && capture_session == s_session && capture_epoch == s_connection_epoch) {
+                    s_stop_reason = DD_REASON_TRANSPORT;
+                    s_recording = false;
+                    s_stop_requested = false;
+                    device_diag_emit(DD_CAPTURE_ABORT, capture_session, s_stop_reason, 0, 0,
+                                     capture_epoch, s_connection_epoch, s_session,
+                                     diagnostic_flags(), tx_now_ms(NULL) - capture_ms);
+                    end_logged = true;
+                    capture_error_ui(capture_session, capture_epoch, "Slow BLE link, try again");
+                }
+                continue;
+            }
+            device_diag_audio_enter();
             end_logged = false;
             char start_json[MAX_CONTROL + 1];
             snprintf(start_json, sizeof(start_json),
@@ -595,6 +807,10 @@ static void audio_task(void *arg)
                     capture_error_ui(capture_session, capture_epoch, "Microphone unavailable");
                 }
                 continue;
+            }
+            if (!s_stop_requested && s_recording && capture_session == s_session &&
+                capture_epoch == s_connection_epoch) {
+                ui_status_set_state(UI_STATUS_RECORDING, "Listening");
             }
             capturing = true;
         }
@@ -696,7 +912,15 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
     case BSP_BTN_LONG: edge = BUTTON_EDGE_LONG; break;
     default: return; // Do not wait for or replay delayed CLICK/DOUBLE events.
     }
-    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const uint32_t now_ms = tx_now_ms(NULL);
+    taskENTER_CRITICAL(&s_sleep_lock);
+    if (s_entering_sleep) {
+        taskEXIT_CRITICAL(&s_sleep_lock);
+        return;
+    }
+    s_last_activity_ms = now_ms;
+    taskEXIT_CRITICAL(&s_sleep_lock);
+    if (s_audio_task) xTaskNotifyGive(s_audio_task);
     const uint32_t context = host_is_ready() ? s_connection_epoch : 0;
     button_gesture_t *gesture = &s_button_gestures[button];
     button_action_t action = button_gesture_update(gesture, edge, now_ms,
@@ -742,7 +966,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
             device_diag_emit(DD_START_REQUEST, s_session, s_connection_epoch, duration_ms,
                              diagnostic_flags(), 0, 0, 0, 0, 0);
             s_recording = true;
-            ui_status_set_state(UI_STATUS_RECORDING, "Listening");
+            ui_status_set_state(UI_STATUS_RECORDING, "Connecting audio");
             if (s_audio_task) xTaskNotifyGive(s_audio_task);
         } else {
             s_stop_reason = DD_REASON_UP;
@@ -795,6 +1019,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
 static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     (void)attr;
+    if (s_entering_sleep) return BLE_ATT_ERR_UNLIKELY;
     int kind = (int)(intptr_t)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && kind == 3) {
         const char info[] = "{\"v\":1,\"type\":\"hello\",\"device\":\"ai-passport\",\"fw\":\"0.1.0\",\"codec\":\"ima-adpcm\",\"sampleRate\":16000,\"channels\":1,\"frameMs\":20}";
@@ -821,14 +1046,19 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
             cJSON_Delete(root);
             return BLE_ATT_ERR_UNLIKELY;
         }
+        if (!accept_host_activity(!s_host_ready)) {
+            cJSON_Delete(root);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
         s_host_ready = true;
         s_result_pending = false;
         device_diag_emit(DD_HOST_READY, s_session, conn, ble_att_mtu(conn), diagnostic_flags(),
                          s_connection_epoch, 0, 0, 0, 0);
         ESP_LOGI(TAG, "Host ready epoch=%lu", (unsigned long)s_connection_epoch);
         log_link("Host link");
-        request_audio_link();
+        request_long_packets();
         ui_status_set_state(UI_STATUS_READY, "Ready");
+        if (s_audio_task) xTaskNotifyGive(s_audio_task);
     } else if (cJSON_IsString(type) && strcmp(type->valuestring, "host_state") == 0) {
         const cJSON *state = cJSON_GetObjectItem(root, "state");
         if (cJSON_IsString(state)) {
@@ -837,13 +1067,21 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
                 !strcmp(state->valuestring, "processing") ? 3 :
                 !strcmp(state->valuestring, "success") ? 4 :
                 !strcmp(state->valuestring, "error") ? 5 : 0;
+            if (!accept_host_activity((state_id == 3 && !s_result_pending) ||
+                                      (state_id == 4 && s_result_pending) ||
+                                      ((state_id == 1 || state_id == 5) && voice_busy()))) {
+                cJSON_Delete(root);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
             uint32_t length, category;
             const uint32_t hash = diagnostic_message(cJSON_GetObjectItem(root, "message"), &length, &category);
             device_diag_emit(DD_HOST_STATE, s_session, state_id, diagnostic_flags(), s_queued_frames,
                              s_connection_epoch, category, hash, length, s_stop_reason);
             if (strcmp(state->valuestring, "ready") == 0) {
                 s_host_ready = true;
-                if (!s_recording) s_result_pending = false;
+                if (!s_recording && s_result_pending) {
+                    s_result_pending = false;
+                }
                 if (!s_recording && !s_finishing) ui_status_set_state(UI_STATUS_READY, "Ready");
             } else if (strcmp(state->valuestring, "recording") == 0) {
                 ui_status_set_state(UI_STATUS_RECORDING, "Listening");
@@ -864,6 +1102,7 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
                 s_stop_requested = false;
                 ui_status_set_state(UI_STATUS_ERROR, "Try again");
             }
+            if (s_audio_task && state_id != 0) xTaskNotifyGive(s_audio_task);
         }
     }
     cJSON_Delete(root); (void)conn; return 0;
@@ -879,6 +1118,7 @@ static const struct ble_gatt_svc_def services[] = {
 
 static int advertise(void)
 {
+    if (s_entering_sleep) return 0;
     // Flags + a 128-bit UUID fit in the 31-byte primary packet. The complete
     // name goes in scan response; placing both in one packet exceeds the limit.
     struct ble_hs_adv_fields fields = {0};
@@ -927,7 +1167,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_conn = event->connect.conn_handle;
             s_host_ready = false; s_control_subscribed = false; s_audio_subscribed = false;
             s_result_pending = false; s_finishing = false;
-            s_hello_sent = false; s_link_parameters_requested = false;
+            s_hello_sent = false;
             log_link("Connected");
             ui_status_set_state(UI_STATUS_STARTING, "Connecting");
         } else {
@@ -941,12 +1181,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_stop_reason = DD_REASON_DISCONNECT;
         ESP_LOGW(TAG, "Disconnected reason=%d session=%lu recording=%u", event->disconnect.reason,
                  (unsigned long)s_session, s_recording);
+        if (voice_busy()) note_activity();
         ++s_connection_epoch;
         s_recording = false; s_stop_requested = false; s_host_ready = false;
         s_result_pending = false; s_finishing = false;
         s_control_subscribed = false; s_audio_subscribed = false; s_conn = NO_CONN;
-        s_hello_sent = false; s_link_parameters_requested = false;
+        s_hello_sent = false;
         ui_status_set_state(UI_STATUS_DISCONNECTED, "Waiting for Vokie");
+        if (s_audio_task) xTaskNotifyGive(s_audio_task);
         advertise();
     } else if (event->type == BLE_GAP_EVENT_SUBSCRIBE && event->subscribe.conn_handle == s_conn) {
         // NimBLE reports the characteristic value handle, not the CCCD handle.
@@ -972,6 +1214,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                          s_connection_epoch, 0, 0, 0, 0, 0);
         ESP_LOGI(TAG, "MTU updated conn=%u mtu=%u", event->mtu.conn_handle, event->mtu.value);
     } else if (event->type == BLE_GAP_EVENT_CONN_UPDATE) {
+        ++s_link_update_count;
         device_diag_emit(DD_LINK_REQUEST, s_session, 3, event->conn_update.status,
                          s_conn, s_connection_epoch, 0, 0, 0, 0);
         ESP_LOGI(TAG, "Connection parameter update status=%d", event->conn_update.status);
@@ -1001,6 +1244,12 @@ esp_err_t vokie_ble_start(void)
     ESP_LOGI(TAG, "BLE audio transport: cancel on failure, result gate, audio-time RAM logging");
     esp_err_t err = bsp_audio_init();
     if (err != ESP_OK) return err;
+#if CONFIG_PM_ENABLE
+    if (!s_deep_sleep_lock) {
+        err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "deep_sleep", &s_deep_sleep_lock);
+        if (err != ESP_OK) return err;
+    }
+#endif
     // The worker owns stream open/close as well as all PCM I/O.
     if (!s_ok_hold_timer) {
         const esp_timer_create_args_t timer = {
@@ -1014,6 +1263,7 @@ esp_err_t vokie_ble_start(void)
     ble_svc_gap_init(); ble_svc_gatt_init(); ble_svc_gap_device_name_set(DEVICE_NAME);
     if (ble_gatts_count_cfg(services) != 0 || ble_gatts_add_svcs(services) != 0) return ESP_FAIL;
     ble_hs_cfg.reset_cb = on_reset; ble_hs_cfg.sync_cb = on_sync;
+    s_last_activity_ms = tx_now_ms(NULL);
     nimble_port_freertos_init(host_task);
     if (xTaskCreate(audio_task, "vokie_audio", 5120, NULL, 5, &s_audio_task) != pdPASS) return ESP_ERR_NO_MEM;
     s_started = true; ESP_LOGI(TAG, "Vokie Passport BLE ready"); return ESP_OK;

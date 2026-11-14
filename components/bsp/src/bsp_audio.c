@@ -7,12 +7,14 @@
 #include "esp_codec_dev_defaults.h"
 #include "es8311_codec.h"
 #include "driver/i2s_std.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_pm.h"
 
 static const char *TAG = "bsp_audio";
 
 static esp_codec_dev_handle_t s_dev;
+static const audio_codec_ctrl_if_t *s_ctrl;
 static i2s_chan_handle_t      s_tx, s_rx;
 // 记录当前已打开的格式,用于判断"要不要 close 重开"(见头文件里的坑说明)。
 static uint32_t s_hz;
@@ -119,6 +121,7 @@ esp_err_t bsp_audio_init(void) {
         .data_if  = data,
     });
     if (!s_dev) { ESP_LOGE(TAG, "esp_codec_dev_new 失败"); return ESP_FAIL; }
+    s_ctrl = ctrl;
 
     ESP_LOGI(TAG, "ES8311 就绪");
     return ESP_OK;
@@ -233,6 +236,36 @@ esp_err_t bsp_audio_suspend(void) {
     s_opened = false;
     s_tx_running = s_rx_running = false;
     return bsp_audio_pause();
+}
+
+esp_err_t bsp_audio_prepare_deep_sleep(void) {
+    if (!s_ctrl) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = bsp_audio_suspend();
+
+    // FoloToy's ES8311 suspend sequence also removes the clock-pin pull-ups.
+    static const uint8_t suspend[][2] = {
+        {0x32, 0x00}, {0x17, 0x00}, {0x0E, 0xFF}, {0x12, 0x02},
+        {0x14, 0x00}, {0x0D, 0xFA}, {0x15, 0x00}, {0x02, 0x10},
+        {0x00, 0x00}, {0x00, 0x1F}, {0x01, 0x30}, {0x01, 0x00},
+        {0x45, 0x01}, {0x0D, 0xFC}, {0x02, 0x00},
+    };
+    for (size_t i = 0; i < sizeof(suspend) / sizeof(suspend[0]); ++i) {
+        uint8_t value = suspend[i][1];
+        if (s_ctrl->write_reg(s_ctrl, suspend[i][0], 1, &value, 1) != 0)
+            err = ESP_FAIL;
+    }
+    uint8_t power = 0, pullups = 0;
+    if (s_ctrl->read_reg(s_ctrl, 0x0D, 1, &power, 1) != 0 || power != 0xFC ||
+        s_ctrl->read_reg(s_ctrl, 0x45, 1, &pullups, 1) != 0 || pullups != 0x01)
+        err = ESP_ERR_INVALID_RESPONSE;
+
+    const gpio_config_t pins = {
+        .pin_bit_mask = (1ULL << BSP_I2S_MCLK) | (1ULL << BSP_I2S_BCLK) |
+                        (1ULL << BSP_I2S_WS) | (1ULL << BSP_I2S_DOUT) | (1ULL << BSP_I2S_DIN),
+        .mode = GPIO_MODE_INPUT,
+    };
+    esp_err_t pin_err = gpio_config(&pins);
+    return err != ESP_OK ? err : pin_err;
 }
 
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {

@@ -40,7 +40,7 @@ run_static_checks() {
         -Itests/battery_stubs -Icomponents/bsp/include \
         tests/test_bsp_battery.c components/bsp/src/bsp_battery.c \
         -o "${test_dir}/test_bsp_battery"
-    for scenario in {0..14}; do
+    for scenario in {0..16}; do
         "${test_dir}/test_bsp_battery" "${scenario}"
     done
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
@@ -49,6 +49,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_usb_standby.c -o "${test_dir}/test_usb_standby"
     "${test_dir}/test_usb_standby"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_standby_policy.c -o "${test_dir}/test_standby_policy"
+    "${test_dir}/test_standby_policy"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DCONFIG_PM_ENABLE=1 \
         -Itests/power_stubs -Itests/battery_stubs -Icomponents/bsp/include \
         tests/test_bsp_audio_power.c components/bsp/src/bsp_audio.c \

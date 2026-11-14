@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- Validate the CW2017 cell voltage before accepting the first charge reading. When the gauge reports 0% with an invalid voltage, show an unavailable reading until the gauge recovers.
+
+- Request a 90–120 ms BLE connection interval after 20 seconds of inactivity. Restore the 15 ms audio link before starting capture after a slow connection. After 15 minutes idle on battery, enter deep sleep. A function key wakes the device and starts BLE reconnection.
+
 - Request a fixed 15 ms BLE interval for the 20 ms audio cadence instead of allowing Windows to retain 30 ms. Record separate MSYS pool snapshots so an exhausted ATT-header pool is distinguishable from audio-payload exhaustion. Keep retry deadlines, buffer counts and BLE V1 unchanged; verify the central's actual interval and repeat device voice acceptance.
 
 - Allocate audio from the existing larger MSYS pool with explicit header room, preserving the smaller pool for control and RX. Fix allocation failures with unused large blocks caused by the zero-size best-fit helper; retain the 12/24 buffer counts and existing retry limits. Add ownership/capacity regression tests and validate the pinned pool configuration.

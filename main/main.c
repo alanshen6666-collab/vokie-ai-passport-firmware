@@ -3,6 +3,7 @@
 #include "bsp_i2c.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "esp_sleep.h"
 #include "device_diag.h"
 #include "usb_standby.h"
 #include "lvgl.h"
@@ -15,6 +16,9 @@ static const char *TAG = "main";
 void app_main(void)
 {
     ESP_LOGI(TAG, "Vokie AI Passport firmware starting");
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
+        ESP_LOGI(TAG, "Woke from deep sleep via a function key");
+    }
 #if CONFIG_PM_ENABLE
     const esp_pm_config_t power = {
         .max_freq_mhz = 160,

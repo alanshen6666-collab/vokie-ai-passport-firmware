@@ -4,7 +4,11 @@
 #include <stddef.h>
 #include "driver/i2s_std.h"
 typedef void *esp_codec_dev_handle_t;
-typedef int audio_codec_ctrl_if_t;
+typedef struct audio_codec_ctrl_if_t audio_codec_ctrl_if_t;
+struct audio_codec_ctrl_if_t {
+    int (*read_reg)(const audio_codec_ctrl_if_t *, int, int, void *, int);
+    int (*write_reg)(const audio_codec_ctrl_if_t *, int, int, void *, int);
+};
 typedef int audio_codec_data_if_t;
 typedef int audio_codec_if_t;
 typedef struct { int port, addr; void *bus_handle; } audio_codec_i2c_cfg_t;

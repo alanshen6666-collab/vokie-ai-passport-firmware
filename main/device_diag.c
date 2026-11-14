@@ -6,6 +6,7 @@
 #include "esp_partition.h"
 #include "esp_random.h"
 #include "esp_system.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -111,9 +112,10 @@ static void worker(void *arg)
     ESP_LOGI(TAG, "Persistent journal ready: slots=%lu next=%lu offset=0x%lx",
              (unsigned long)journal.slots, (unsigned long)journal.next_sequence,
              (unsigned long)s_partition->address);
+    const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
     device_diag_emit(DD_BOOT, 0, esp_reset_reason(), esp_get_free_heap_size(),
                      esp_get_minimum_free_heap_size(), journal.next_sequence,
-                     journal.slots, 0, 0, 0);
+                     journal.slots, wake_cause, (uint32_t)esp_sleep_get_gpio_wakeup_status(), 0);
     uint32_t build[8];
     memcpy(build, esp_app_get_description()->app_elf_sha256, sizeof(build));
     device_diag_emit(DD_BUILD, 0, build[0], build[1], build[2], build[3], build[4], build[5], build[6], build[7]);
